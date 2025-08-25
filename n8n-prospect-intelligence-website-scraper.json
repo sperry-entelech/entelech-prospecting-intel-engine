@@ -1,0 +1,391 @@
+{
+  "name": "Prospect Intelligence - Website Scraper",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "website-analysis",
+        "options": {
+          "enableCors": true,
+          "allowedOrigins": ["https://entelech.ai", "https://app.entelech.ai"]
+        },
+        "authentication": "headerAuth"
+      },
+      "id": "webhook-trigger",
+      "name": "Website Analysis Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 200],
+      "webhookId": "website-analysis-trigger"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "validate-url",
+              "leftValue": "={{ $json.url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "validate-api-key",
+              "leftValue": "={{ $json.headers['x-api-key'] }}",
+              "rightValue": "={{ $env.N8N_WEBHOOK_API_KEY }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [400, 200]
+    },
+    {
+      "parameters": {
+        "requestMethod": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 30000,
+          "redirect": {
+            "followRedirects": true,
+            "maxRedirects": 5
+          },
+          "headers": {
+            "User-Agent": "Mozilla/5.0 (compatible; EntelechwBot/1.0; +https://entelech.ai/bot)"
+          }
+        }
+      },
+      "id": "fetch-website",
+      "name": "Fetch Website Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [600, 150],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and clean HTML content for analysis\nconst cheerio = require('cheerio');\n\n// Get the HTML content\nconst html = $input.first().json.data || '';\nconst $ = cheerio.load(html);\n\n// Remove unwanted elements\n$('script, style, nav, footer, header, .cookie, .popup, .modal').remove();\n\n// Extract key content sections\nconst extractedData = {\n  title: $('title').text().trim(),\n  metaDescription: $('meta[name=\"description\"]').attr('content') || '',\n  headings: {\n    h1: $('h1').map((i, el) => $(el).text().trim()).get(),\n    h2: $('h2').map((i, el) => $(el).text().trim()).get(),\n    h3: $('h3').map((i, el) => $(el).text().trim()).get()\n  },\n  mainContent: $('main, .content, .container, body').first().text().replace(/\\s+/g, ' ').trim(),\n  services: [],\n  contactInfo: {\n    forms: $('form').length,\n    emails: [],\n    phones: []\n  },\n  teamIndicators: [],\n  automationLevel: 'unknown',\n  url: $('webhook-trigger').first().json.url\n};\n\n// Extract service-related content\nconst serviceKeywords = ['service', 'solution', 'offering', 'product', 'consultation', 'support'];\nserviceKeywords.forEach(keyword => {\n  const serviceElements = $(`*:contains(\"${keyword}\")`).filter((i, el) => {\n    const text = $(el).text().toLowerCase();\n    return text.includes(keyword) && text.length < 200;\n  });\n  serviceElements.each((i, el) => {\n    const text = $(el).text().trim();\n    if (text && !extractedData.services.includes(text)) {\n      extractedData.services.push(text);\n    }\n  });\n});\n\n// Extract contact information\nconst emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/g;\nconst phoneRegex = /(?:\\+?1[-.]?)?(?:\\(?[0-9]{3}\\)?[-.]?)?[0-9]{3}[-.]?[0-9]{4}/g;\n\nconst pageText = extractedData.mainContent;\nconst emails = pageText.match(emailRegex) || [];\nconst phones = pageText.match(phoneRegex) || [];\n\nextractedData.contactInfo.emails = [...new Set(emails)];\nextractedData.contactInfo.phones = [...new Set(phones)];\n\n// Look for team indicators\nconst teamKeywords = ['team', 'staff', 'employee', 'founder', 'ceo', 'about us', 'our team'];\nteamKeywords.forEach(keyword => {\n  const teamElements = $(`*:contains(\"${keyword}\")`).filter((i, el) => {\n    const text = $(el).text().toLowerCase();\n    return text.includes(keyword) && text.length < 300;\n  });\n  teamElements.each((i, el) => {\n    const text = $(el).text().trim();\n    if (text && !extractedData.teamIndicators.includes(text)) {\n      extractedData.teamIndicators.push(text);\n    }\n  });\n});\n\n// Basic automation level assessment\nconst automationKeywords = ['automated', 'ai', 'machine learning', 'chatbot', 'api', 'integration', 'workflow'];\nconst hasAutomation = automationKeywords.some(keyword => \n  extractedData.mainContent.toLowerCase().includes(keyword)\n);\n\nextractedData.automationLevel = hasAutomation ? 'advanced' : 'basic';\n\n// Truncate content for API efficiency\nif (extractedData.mainContent.length > 8000) {\n  extractedData.mainContent = extractedData.mainContent.substring(0, 8000) + '...';\n}\n\nreturn [{ json: extractedData }];"
+      },
+      "id": "extract-content",
+      "name": "Extract & Clean Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [800, 150]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "options": {
+          "baseURL": "={{ $env.AZURE_OPENAI_ENDPOINT }}",
+          "headers": {
+            "api-key": "={{ $env.AZURE_OPENAI_API_KEY }}"
+          }
+        },
+        "model": "gpt-4",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert business analyst specializing in service business automation opportunities. Analyze website content and provide structured insights about the business model, team structure, automation level, and improvement opportunities. Respond only with valid JSON."
+            },
+            {
+              "role": "user",
+              "content": "=Analyze this website data and provide insights:\n\nWebsite: {{ $json.url }}\nTitle: {{ $json.title }}\nDescription: {{ $json.metaDescription }}\nMain Content: {{ $json.mainContent }}\nServices Found: {{ $json.services }}\nContact Methods: {{ $json.contactInfo }}\nTeam Indicators: {{ $json.teamIndicators }}\nCurrent Automation Level: {{ $json.automationLevel }}\n\nProvide analysis in this exact JSON format:\n{\n  \"businessModel\": {\n    \"type\": \"field-service|professional-service|consulting|retail|other\",\n    \"primaryServices\": [\"service1\", \"service2\"],\n    \"targetMarket\": \"description\",\n    \"revenueModel\": \"subscription|project|hourly|product|mixed\"\n  },\n  \"teamStructure\": {\n    \"estimatedSize\": \"1-5|6-20|21-50|51-100|100+\",\n    \"keyRoles\": [\"role1\", \"role2\"],\n    \"organizationMaturity\": \"startup|growing|established|enterprise\"\n  },\n  \"automationAssessment\": {\n    \"currentLevel\": \"manual|basic|intermediate|advanced\",\n    \"digitalPresence\": \"poor|basic|good|excellent\",\n    \"systemIntegration\": \"none|basic|moderate|advanced\",\n    \"customerJourney\": \"manual|semi-automated|automated\"\n  },\n  \"opportunityIndicators\": {\n    \"manualProcesses\": [\"process1\", \"process2\"],\n    \"repetitiveTasks\": [\"task1\", \"task2\"],\n    \"communicationGaps\": [\"gap1\", \"gap2\"],\n    \"efficiencyIssues\": [\"issue1\", \"issue2\"]\n  },\n  \"leadCapture\": {\n    \"methods\": [\"contact-form\", \"phone\", \"email\", \"chat\", \"booking\"],\n    \"conversionOptimization\": \"poor|fair|good|excellent\",\n    \"followUpProcess\": \"none|manual|semi-automated|automated\"\n  },\n  \"recommendedPackage\": \"basic|professional|enterprise\",\n  \"confidenceScore\": 0.95\n}"
+            }
+          ]
+        },
+        "temperature": 0.3,
+        "maxTokens": 1500
+      },
+      "id": "analyze-with-ai",
+      "name": "Analyze with Azure OpenAI",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1000, 150],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and validate AI analysis response\nconst aiResponse = $input.first().json.message?.content || '{}';\n\ntry {\n  const analysis = JSON.parse(aiResponse);\n  \n  // Validate required fields and set defaults\n  const validatedAnalysis = {\n    businessModel: analysis.businessModel || {\n      type: 'other',\n      primaryServices: [],\n      targetMarket: 'Unknown',\n      revenueModel: 'mixed'\n    },\n    teamStructure: analysis.teamStructure || {\n      estimatedSize: '1-5',\n      keyRoles: [],\n      organizationMaturity: 'startup'\n    },\n    automationAssessment: analysis.automationAssessment || {\n      currentLevel: 'manual',\n      digitalPresence: 'basic',\n      systemIntegration: 'none',\n      customerJourney: 'manual'\n    },\n    opportunityIndicators: analysis.opportunityIndicators || {\n      manualProcesses: [],\n      repetitiveTasks: [],\n      communicationGaps: [],\n      efficiencyIssues: []\n    },\n    leadCapture: analysis.leadCapture || {\n      methods: ['contact-form'],\n      conversionOptimization: 'fair',\n      followUpProcess: 'manual'\n    },\n    recommendedPackage: analysis.recommendedPackage || 'basic',\n    confidenceScore: analysis.confidenceScore || 0.5,\n    analysisTimestamp: new Date().toISOString(),\n    originalUrl: $('extract-content').first().json.url\n  };\n  \n  return [{ json: validatedAnalysis }];\n  \n} catch (error) {\n  // Return fallback analysis if parsing fails\n  return [{\n    json: {\n      businessModel: {\n        type: 'other',\n        primaryServices: ['General Services'],\n        targetMarket: 'Small Business',\n        revenueModel: 'mixed'\n      },\n      teamStructure: {\n        estimatedSize: '1-5',\n        keyRoles: ['Owner'],\n        organizationMaturity: 'startup'\n      },\n      automationAssessment: {\n        currentLevel: 'manual',\n        digitalPresence: 'basic',\n        systemIntegration: 'none',\n        customerJourney: 'manual'\n      },\n      opportunityIndicators: {\n        manualProcesses: ['Client Communication', 'Scheduling'],\n        repetitiveTasks: ['Follow-up', 'Data Entry'],\n        communicationGaps: ['Response Time'],\n        efficiencyIssues: ['Manual Processes']\n      },\n      leadCapture: {\n        methods: ['contact-form'],\n        conversionOptimization: 'fair',\n        followUpProcess: 'manual'\n      },\n      recommendedPackage: 'basic',\n      confidenceScore: 0.3,\n      analysisTimestamp: new Date().toISOString(),\n      originalUrl: $('extract-content').first().json.url,\n      error: 'AI analysis parsing failed, using fallback'\n    }\n  }];\n}"
+      },
+      "id": "validate-analysis",
+      "name": "Validate Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1200, 150]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "prospect_analyses"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "url": "={{ $json.originalUrl }}",
+            "business_model": "={{ JSON.stringify($json.businessModel) }}",
+            "team_structure": "={{ JSON.stringify($json.teamStructure) }}",
+            "automation_assessment": "={{ JSON.stringify($json.automationAssessment) }}",
+            "opportunity_indicators": "={{ JSON.stringify($json.opportunityIndicators) }}",
+            "lead_capture": "={{ JSON.stringify($json.leadCapture) }}",
+            "recommended_package": "={{ $json.recommendedPackage }}",
+            "confidence_score": "={{ $json.confidenceScore }}",
+            "analysis_timestamp": "={{ $json.analysisTimestamp }}",
+            "status": "completed"
+          }
+        },
+        "options": {
+          "queryReplacement": "id,url,business_model,team_structure,automation_assessment,opportunity_indicators,lead_capture,recommended_package,confidence_score,analysis_timestamp,status,created_at,updated_at"
+        }
+      },
+      "id": "store-analysis",
+      "name": "Store Analysis in PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1400, 150],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/automation-opportunity-detection",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.N8N_INTERNAL_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"analysisId\": $('store-analysis').first().json.id,\n  \"url\": $json.originalUrl,\n  \"businessModel\": $json.businessModel,\n  \"automationLevel\": $json.automationAssessment.currentLevel,\n  \"recommendedPackage\": $json.recommendedPackage\n}) }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "trigger-opportunity-detection",
+      "name": "Trigger Opportunity Detection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1600, 150],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  \"status\": \"success\",\n  \"message\": \"Website analysis completed successfully\",\n  \"analysisId\": $('store-analysis').first().json.id,\n  \"recommendedPackage\": $json.recommendedPackage,\n  \"confidenceScore\": $json.confidenceScore,\n  \"nextSteps\": \"Automation opportunity detection workflow triggered\"\n}) }}"
+      },
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1800, 150]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  \"status\": \"error\",\n  \"message\": \"Invalid input parameters\",\n  \"required\": [\"url\"],\n  \"headers\": [\"x-api-key\"]\n}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [400, 350]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "workflow_logs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "workflow_name": "website-scraper",
+            "status": "error",
+            "error_message": "={{ $json.error?.message || 'Unknown error occurred' }}",
+            "input_data": "={{ JSON.stringify($('webhook-trigger').first().json) }}",
+            "timestamp": "={{ new Date().toISOString() }}"
+          }
+        }
+      },
+      "id": "log-error",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [600, 350],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Website Analysis Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Fetch Website Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Website Content": {
+      "main": [
+        [
+          {
+            "node": "Extract & Clean Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract & Clean Content": {
+      "main": [
+        [
+          {
+            "node": "Analyze with Azure OpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze with Azure OpenAI": {
+      "main": [
+        [
+          {
+            "node": "Validate Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Analysis": {
+      "main": [
+        [
+          {
+            "node": "Store Analysis in PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Analysis in PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Trigger Opportunity Detection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Opportunity Detection": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": {
+      "id": "error-handler-workflow"
+    },
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": {},
+  "tags": [
+    {
+      "createdAt": "2025-01-15T10:00:00.000Z",
+      "updatedAt": "2025-01-15T10:00:00.000Z",
+      "id": "prospect-intelligence",
+      "name": "Prospect Intelligence"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-01-15T10:00:00.000Z",
+  "versionId": "1"
+}

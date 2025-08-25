@@ -1,0 +1,696 @@
+{
+  "name": "Prospect Intelligence - Instantly CRM Integration",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "crm-integration",
+        "options": {
+          "enableCors": true
+        },
+        "authentication": "headerAuth"
+      },
+      "id": "crm-webhook",
+      "name": "CRM Integration Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 200],
+      "webhookId": "crm-integration-trigger"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "validate-analysis-id",
+              "leftValue": "={{ $json.analysisId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "validate-action-type",
+              "leftValue": "={{ $json.actionType }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "validate-api-key",
+              "leftValue": "={{ $json.headers['x-api-key'] }}",
+              "rightValue": "={{ $env.N8N_INTERNAL_API_KEY }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "validate-crm-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [400, 200]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "companies"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "id",
+              "condition": "equal",
+              "value": "={{ $json.analysisId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-company-data",
+      "name": "Fetch Company Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [600, 150],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "automation_opportunities"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "company_id",
+              "condition": "equal",
+              "value": "={{ $json.analysisId }}"
+            }
+          ]
+        },
+        "options": {
+          "sort": {
+            "values": [
+              {
+                "column": "priority_score",
+                "direction": "DESC"
+              }
+            ]
+          }
+        }
+      },
+      "id": "fetch-automation-opportunities",
+      "name": "Fetch Automation Opportunities",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [600, 250],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Enhanced prospect data preparation for Instantly integration\nconst companyData = $('fetch-company-data').first().json;\nconst opportunities = $('fetch-automation-opportunities').all().map(item => item.json);\nconst webhookData = $('crm-webhook').first().json;\n\n// Calculate comprehensive lead metrics\nlet leadScore = 0;\nlet totalROI = 0;\nlet recommendedPackage = 'basic_2_5k';\nlet priorityLevel = 'medium';\n\n// Company size scoring (0-25 points)\nconst companySizeScores = {\n  'startup': 15,\n  'small': 18,\n  'medium': 22,\n  'large': 25,\n  'enterprise': 25\n};\nleadScore += companySizeScores[companyData.company_size_category] || 15;\n\n// Industry scoring (0-20 points)\nconst highValueIndustries = [\n  'professional services', 'consulting', 'financial services', \n  'healthcare', 'legal services', 'technology services'\n];\nconst industryScore = highValueIndustries.some(industry => \n  companyData.industry?.toLowerCase().includes(industry.toLowerCase())\n) ? 20 : 15;\nleadScore += industryScore;\n\n// Automation opportunities scoring (0-35 points)\nif (opportunities.length > 0) {\n  const avgPriorityScore = opportunities.reduce((sum, opp) => sum + (opp.priority_score || 0), 0) / opportunities.length;\n  leadScore += Math.round(avgPriorityScore * 0.35);\n  \n  // Calculate total ROI potential\n  totalROI = opportunities.reduce((sum, opp) => sum + (opp.annual_savings || 0), 0);\n  \n  // Determine recommended package based on ROI and complexity\n  const highROIOpportunities = opportunities.filter(opp => opp.annual_savings > 15000).length;\n  const complexOpportunities = opportunities.filter(opp => opp.automation_complexity === 'high').length;\n  \n  if (totalROI > 50000 || highROIOpportunities >= 3 || complexOpportunities >= 2) {\n    recommendedPackage = 'enterprise_15k';\n    priorityLevel = 'high';\n  } else if (totalROI > 25000 || highROIOpportunities >= 1 || opportunities.length >= 3) {\n    recommendedPackage = 'professional_7_5k';\n    priorityLevel = 'medium';\n  }\n}\n\n// Website analysis quality boost (0-10 points)\nif (companyData.status === 'analyzed') {\n  leadScore += 10;\n}\n\n// Revenue-based scoring (0-10 points)\nif (companyData.annual_revenue_min) {\n  if (companyData.annual_revenue_min > 10000000) leadScore += 10;\n  else if (companyData.annual_revenue_min > 5000000) leadScore += 8;\n  else if (companyData.annual_revenue_min > 1000000) leadScore += 6;\n  else leadScore += 4;\n}\n\n// Cap lead score at 100\nleadScore = Math.min(leadScore, 100);\n\n// Determine priority level based on lead score\nif (leadScore >= 80) priorityLevel = 'high';\nelse if (leadScore >= 60) priorityLevel = 'medium';\nelse priorityLevel = 'low';\n\n// Generate business email\nconst domain = companyData.domain || companyData.website?.replace(/https?:\\/\\/(www\\.)?/, '').split('/')[0];\nconst businessName = companyData.name?.replace(/[^a-zA-Z0-9\\s]/g, '')?.split(' ')[0]?.toLowerCase() || 'business';\nconst emailOptions = [\n  `info@${domain}`,\n  `contact@${domain}`,\n  `hello@${domain}`,\n  `${businessName}@${domain}`,\n  `admin@${domain}`\n];\nconst prospectEmail = emailOptions[0]; // Use primary email\n\n// Prepare comprehensive tags for segmentation\nconst tags = [\n  `Lead-Score-${Math.floor(leadScore/10)*10}`, // e.g., \"Lead-Score-80\"\n  `Package-${recommendedPackage.replace('_', '-')}`,\n  `Priority-${priorityLevel.charAt(0).toUpperCase() + priorityLevel.slice(1)}`,\n  `Industry-${companyData.industry?.replace(/[^a-zA-Z0-9]/g, '-') || 'Unknown'}`,\n  `Size-${companyData.company_size_category || 'Unknown'}`,\n  `ROI-${totalROI > 50000 ? 'High' : totalROI > 25000 ? 'Medium' : 'Low'}`,\n  `Opportunities-${opportunities.length}`,\n  `Source-Prospect-Intelligence`\n].filter(Boolean);\n\n// Determine lead temperature for Instantly\nlet leadTemperature = 'cold';\nif (leadScore >= 85) leadTemperature = 'hot';\nelse if (leadScore >= 70) leadTemperature = 'warm';\nelse if (leadScore >= 50) leadTemperature = 'interested';\n\n// Create custom fields for Instantly\nconst customFields = {\n  company_name: companyData.name,\n  website: companyData.website,\n  industry: companyData.industry,\n  company_size: companyData.company_size_category,\n  employee_count: `${companyData.employee_count_min || 'Unknown'}-${companyData.employee_count_max || 'Unknown'}`,\n  annual_revenue: companyData.annual_revenue_min ? `$${(companyData.annual_revenue_min / 1000000).toFixed(1)}M+` : 'Unknown',\n  lead_score: leadScore,\n  recommended_package: recommendedPackage,\n  total_roi_potential: totalROI,\n  automation_opportunities_count: opportunities.length,\n  priority_level: priorityLevel,\n  lead_temperature: leadTemperature,\n  analysis_date: new Date().toISOString().split('T')[0],\n  \n  // Top 3 automation opportunities\n  top_opportunity_1: opportunities[0]?.process_name || 'N/A',\n  top_opportunity_1_savings: opportunities[0]?.annual_savings || 0,\n  top_opportunity_2: opportunities[1]?.process_name || 'N/A', \n  top_opportunity_2_savings: opportunities[1]?.annual_savings || 0,\n  top_opportunity_3: opportunities[2]?.process_name || 'N/A',\n  top_opportunity_3_savings: opportunities[2]?.annual_savings || 0\n};\n\n// Prepare final CRM data for Instantly API\nconst instantlyData = {\n  // Lead information\n  email: prospectEmail,\n  firstName: 'Business',\n  lastName: 'Owner',\n  companyName: companyData.name,\n  \n  // Instantly-specific fields\n  leadScore: leadScore,\n  leadTemperature: leadTemperature,\n  priorityLevel: priorityLevel,\n  \n  // Package and ROI data\n  recommendedPackage: recommendedPackage,\n  totalROI: totalROI,\n  opportunitiesCount: opportunities.length,\n  \n  // Tagging and segmentation\n  tags: tags,\n  \n  // Custom fields for personalization\n  customFields: customFields,\n  \n  // Campaign assignment data\n  targetCampaign: null, // Will be determined in next step\n  targetSequence: null, // Will be determined in next step\n  \n  // Metadata\n  companyId: companyData.id,\n  actionType: webhookData.actionType || 'analysis-completed',\n  analysisTimestamp: new Date().toISOString()\n};\n\nreturn [{ json: instantlyData }];"
+      },
+      "id": "prepare-instantly-data",
+      "name": "Prepare Instantly Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [800, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Intelligent campaign and sequence selection based on lead characteristics\nconst leadData = $input.first().json;\nconst leadScore = leadData.leadScore;\nconst recommendedPackage = leadData.recommendedPackage;\nconst totalROI = leadData.totalROI;\nconst industry = leadData.customFields.industry;\nconst companySize = leadData.customFields.company_size;\nconst opportunitiesCount = leadData.opportunitiesCount;\n\n// Define campaign mapping based on lead profile\nlet campaignId = '';\nlet sequenceId = '';\nlet campaignName = '';\nlet sequenceName = '';\nlet delayHours = 2; // Default delay\nlet maxFollowUps = 5;\n\n// High-value enterprise leads (score 80+, enterprise package, or high ROI)\nif (leadScore >= 80 || recommendedPackage === 'enterprise_15k' || totalROI > 50000) {\n  campaignId = 'entelech_enterprise_vip';\n  sequenceId = 'seq_enterprise_executive';\n  campaignName = 'Enterprise VIP - Executive Outreach';\n  sequenceName = 'Executive Decision Maker Sequence';\n  delayHours = 0.5; // 30 minute delay for immediate attention\n  maxFollowUps = 7;\n}\n// High-potential professional leads (score 60-79, professional package)\nelse if (leadScore >= 60 || recommendedPackage === 'professional_7_5k' || (totalROI > 25000 && opportunitiesCount >= 2)) {\n  campaignId = 'entelech_professional_priority';\n  sequenceId = 'seq_professional_priority';\n  campaignName = 'Professional Priority - High Value Prospects';\n  sequenceName = 'Professional Service Automation Sequence';\n  delayHours = 1; // 1 hour delay\n  maxFollowUps = 6;\n}\n// Warm prospects with specific automation needs (score 40-59)\nelse if (leadScore >= 40 || opportunitiesCount >= 1) {\n  campaignId = 'entelech_warm_prospects';\n  sequenceId = 'seq_warm_nurture';\n  campaignName = 'Warm Prospects - Automation Focused';\n  sequenceName = 'Automation Opportunity Nurture';\n  delayHours = 4; // 4 hour delay\n  maxFollowUps = 5;\n}\n// Cold prospects or low-scoring leads\nelse {\n  campaignId = 'entelech_cold_outreach';\n  sequenceId = 'seq_cold_education';\n  campaignName = 'Cold Outreach - Educational';\n  sequenceName = 'Educational Automation Series';\n  delayHours = 24; // 24 hour delay\n  maxFollowUps = 4;\n}\n\n// Industry-specific adjustments\nconst highTouchIndustries = ['legal services', 'healthcare', 'financial services'];\nif (highTouchIndustries.some(ind => industry?.toLowerCase().includes(ind.toLowerCase()))) {\n  // Add industry-specific sequence variant\n  sequenceId += '_compliance';\n  sequenceName += ' (Compliance Focused)';\n  delayHours = Math.max(delayHours, 2); // Minimum 2 hour delay for high-touch industries\n}\n\n// Size-based adjustments\nif (companySize === 'enterprise' || companySize === 'large') {\n  // Enterprise gets longer consideration time\n  delayHours = Math.max(delayHours, 4);\n}\n\n// Special handling for different action types\nif (leadData.actionType === 'opportunity-calculated') {\n  campaignId += '_roi_report';\n  campaignName += ' (ROI Report Available)';\n  delayHours = Math.max(delayHours / 2, 0.25); // Reduce delay for ROI reports\n}\n\n// Personalization variables for email templates\nconst personalizationVars = {\n  first_name: leadData.firstName,\n  last_name: leadData.lastName,\n  company_name: leadData.companyName,\n  website: leadData.customFields.website,\n  industry: industry,\n  company_size: companySize,\n  lead_score: leadScore,\n  recommended_package: recommendedPackage.replace('_', ' ').replace(/\\b\\w/g, l => l.toUpperCase()),\n  total_roi: totalROI > 0 ? `$${(totalROI/1000).toFixed(0)}K` : 'Significant',\n  opportunities_count: opportunitiesCount,\n  top_opportunity: leadData.customFields.top_opportunity_1,\n  top_opportunity_savings: leadData.customFields.top_opportunity_1_savings > 0 ? \n    `$${(leadData.customFields.top_opportunity_1_savings/1000).toFixed(0)}K` : 'substantial',\n  package_price: recommendedPackage === 'enterprise_15k' ? '$15K' : \n                 recommendedPackage === 'professional_7_5k' ? '$7.5K' : '$2.5K',\n  urgency_level: leadScore >= 80 ? 'High' : leadScore >= 60 ? 'Medium' : 'Low'\n};\n\nconst campaignAssignment = {\n  // Campaign details\n  campaignId: campaignId,\n  sequenceId: sequenceId, \n  campaignName: campaignName,\n  sequenceName: sequenceName,\n  \n  // Timing configuration\n  delayHours: delayHours,\n  maxFollowUps: maxFollowUps,\n  \n  // Personalization\n  personalizationVars: personalizationVars,\n  \n  // Lead data to pass through\n  leadData: leadData,\n  \n  // Assignment reasoning (for logging)\n  assignmentReason: `Lead Score: ${leadScore}, Package: ${recommendedPackage}, ROI: $${(totalROI/1000).toFixed(0)}K, Industry: ${industry}`\n};\n\nreturn [{ json: campaignAssignment }];"
+      },
+      "id": "determine-campaign-assignment",
+      "name": "Determine Campaign Assignment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1000, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.instantly.ai/api/v1/lead/add",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.INSTANTLY_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"campaign_id\": $json.campaignId,\n  \"email\": $json.leadData.email,\n  \"first_name\": $json.leadData.firstName,\n  \"last_name\": $json.leadData.lastName,\n  \"company_name\": $json.leadData.companyName,\n  \"custom_variables\": $json.personalizationVars,\n  \"tags\": $json.leadData.tags,\n  \"lead_score\": $json.leadData.leadScore,\n  \"notes\": `Prospect Intelligence Analysis - Lead Score: ${$json.leadData.leadScore}, Package: ${$json.leadData.recommendedPackage}, ROI Potential: $${Math.round($json.leadData.totalROI/1000)}K`\n}) }}"
+      },
+      "id": "create-instantly-lead",
+      "name": "Create Instantly Lead",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1200, 200],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-instantly-success",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-instantly-response",
+      "name": "Check Instantly Response",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1400, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.instantly.ai/api/v1/sequence/add_lead",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type", 
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.INSTANTLY_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"sequence_id\": $('determine-campaign-assignment').first().json.sequenceId,\n  \"email\": $('determine-campaign-assignment').first().json.leadData.email,\n  \"delay_hours\": $('determine-campaign-assignment').first().json.delayHours,\n  \"max_follow_ups\": $('determine-campaign-assignment').first().json.maxFollowUps\n}) }}"
+      },
+      "id": "add-to-sequence",
+      "name": "Add Lead to Sequence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1600, 150],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "instantly_integrations"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440001",
+            "company_id": "={{ $('determine-campaign-assignment').first().json.leadData.companyId }}",
+            "instantly_lead_id": "={{ $('create-instantly-lead').first().json.lead_id }}",
+            "instantly_campaign_id": "={{ $('determine-campaign-assignment').first().json.campaignId }}",
+            "instantly_sequence_id": "={{ $('determine-campaign-assignment').first().json.sequenceId }}",
+            "lead_status": "active",
+            "lead_temperature": "={{ $('determine-campaign-assignment').first().json.leadData.leadTemperature }}",
+            "engagement_score": "={{ $('determine-campaign-assignment').first().json.leadData.leadScore }}",
+            "assignment_reason": "={{ $('determine-campaign-assignment').first().json.assignmentReason }}",
+            "roi_potential": "={{ $('determine-campaign-assignment').first().json.leadData.totalROI }}",
+            "service_package_tier": "={{ $('determine-campaign-assignment').first().json.leadData.recommendedPackage }}",
+            "custom_fields": "={{ JSON.stringify($('determine-campaign-assignment').first().json.leadData.customFields) }}",
+            "tags": "={{ JSON.stringify($('determine-campaign-assignment').first().json.leadData.tags) }}",
+            "sync_status": "synced",
+            "last_sync_at": "={{ new Date().toISOString() }}"
+          }
+        }
+      },
+      "id": "create-integration-record",
+      "name": "Create Integration Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1800, 150],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "high-priority-check",
+              "leftValue": "={{ $('determine-campaign-assignment').first().json.leadData.leadScore }}",
+              "rightValue": 80,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-priority-alert",
+      "name": "Check Priority Alert",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2000, 150]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"text\": \"🚨 High Priority Lead Alert - Instantly Integration\",\n  \"blocks\": [\n    {\n      \"type\": \"header\", \n      \"text\": {\n        \"type\": \"plain_text\",\n        \"text\": \"High Priority Lead Added to Instantly\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Company:* ${$('determine-campaign-assignment').first().json.leadData.companyName}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Website:* ${$('determine-campaign-assignment').first().json.leadData.customFields.website}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Lead Score:* ${$('determine-campaign-assignment').first().json.leadData.leadScore}/100`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Package:* ${$('determine-campaign-assignment').first().json.leadData.recommendedPackage.replace('_', ' ').toUpperCase()}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*ROI Potential:* $${Math.round($('determine-campaign-assignment').first().json.leadData.totalROI/1000)}K`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Campaign:* ${$('determine-campaign-assignment').first().json.campaignName}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Sequence:* ${$('determine-campaign-assignment').first().json.sequenceName}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*First Email:* ${$('determine-campaign-assignment').first().json.delayHours}h delay`\n        }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": `*Top Automation Opportunity:* ${$('determine-campaign-assignment').first().json.leadData.customFields.top_opportunity_1} (${$('determine-campaign-assignment').first().json.leadData.customFields.top_opportunity_1_savings > 0 ? '$' + Math.round($('determine-campaign-assignment').first().json.leadData.customFields.top_opportunity_1_savings/1000) + 'K savings' : 'High impact'})`\n      }\n    },\n    {\n      \"type\": \"actions\",\n      \"elements\": [\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"View in Instantly\"\n          },\n          \"url\": `https://app.instantly.ai/app/campaigns/${$('determine-campaign-assignment').first().json.campaignId}`\n        }\n      ]\n    }\n  ]\n}) }}"
+      },
+      "id": "send-priority-alert",
+      "name": "Send Priority Alert to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [2200, 100],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.CLAUDE_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"model\": \"claude-3-sonnet-20240229\",\n  \"max_tokens\": 500,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": `Analyze this new high-priority lead and suggest 3 specific personalized talking points for the sales team:\\n\\nCompany: ${$('determine-campaign-assignment').first().json.leadData.companyName}\\nIndustry: ${$('determine-campaign-assignment').first().json.leadData.customFields.industry}\\nLead Score: ${$('determine-campaign-assignment').first().json.leadData.leadScore}/100\\nROI Potential: $${Math.round($('determine-campaign-assignment').first().json.leadData.totalROI/1000)}K\\nTop Opportunity: ${$('determine-campaign-assignment').first().json.leadData.customFields.top_opportunity_1}\\nRecommended Package: ${$('determine-campaign-assignment').first().json.leadData.recommendedPackage}\\n\\nProvide specific, actionable talking points that highlight automation opportunities and ROI potential.`\n    }\n  ]\n}) }}"
+      },
+      "id": "generate-talking-points",
+      "name": "Generate AI Talking Points",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [2200, 200],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "instantly_email_activities"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440001",
+            "integration_id": "={{ $('create-integration-record').first().json.id }}",
+            "company_id": "={{ $('determine-campaign-assignment').first().json.leadData.companyId }}",
+            "activity_type": "lead_created",
+            "activity_timestamp": "={{ new Date().toISOString() }}",
+            "ai_analysis": "={{ JSON.stringify({\n  talking_points: $('generate-talking-points').first()?.json?.content?.[0]?.text || 'AI analysis unavailable',\n  campaign_assignment: $('determine-campaign-assignment').first().json.campaignName,\n  sequence_assignment: $('determine-campaign-assignment').first().json.sequenceName,\n  priority_level: $('determine-campaign-assignment').first().json.leadData.priorityLevel\n}) }}",
+            "suggested_follow_up": "={{ $('determine-campaign-assignment').first().json.sequenceName }} - First email in {{ $('determine-campaign-assignment').first().json.delayHours }} hours\""
+          }
+        }
+      },
+      "id": "log-ai-analysis",
+      "name": "Log AI Analysis",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2400, 200],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  \"status\": \"success\",\n  \"message\": \"Lead successfully added to Instantly automation\",\n  \"lead\": {\n    \"email\": $('determine-campaign-assignment').first().json.leadData.email,\n    \"company\": $('determine-campaign-assignment').first().json.leadData.companyName,\n    \"lead_score\": $('determine-campaign-assignment').first().json.leadData.leadScore,\n    \"lead_temperature\": $('determine-campaign-assignment').first().json.leadData.leadTemperature,\n    \"recommended_package\": $('determine-campaign-assignment').first().json.leadData.recommendedPackage,\n    \"roi_potential\": $('determine-campaign-assignment').first().json.leadData.totalROI\n  },\n  \"campaign\": {\n    \"campaign_id\": $('determine-campaign-assignment').first().json.campaignId,\n    \"campaign_name\": $('determine-campaign-assignment').first().json.campaignName,\n    \"sequence_id\": $('determine-campaign-assignment').first().json.sequenceId,\n    \"sequence_name\": $('determine-campaign-assignment').first().json.sequenceName,\n    \"first_email_delay\": `${$('determine-campaign-assignment').first().json.delayHours} hours`,\n    \"max_follow_ups\": $('determine-campaign-assignment').first().json.maxFollowUps\n  },\n  \"instantly\": {\n    \"lead_id\": $('create-instantly-lead').first()?.json?.lead_id || 'pending',\n    \"integration_status\": \"active\"\n  },\n  \"alerts\": {\n    \"priority_alert_sent\": $('determine-campaign-assignment').first().json.leadData.leadScore >= 80,\n    \"ai_analysis_generated\": Boolean($('generate-talking-points').first()?.json?.content)\n  }\n}) }}"
+      },
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2600, 200]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "instantly_integrations"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440001",
+            "company_id": "={{ $('determine-campaign-assignment').first().json.leadData.companyId }}",
+            "sync_status": "error",
+            "sync_error_message": "={{ $('create-instantly-lead').first()?.json?.message || 'Failed to create lead in Instantly' }}",
+            "retry_count": 1,
+            "custom_fields": "={{ JSON.stringify($('determine-campaign-assignment').first().json.leadData.customFields) }}",
+            "tags": "={{ JSON.stringify($('determine-campaign-assignment').first().json.leadData.tags) }}"
+          }
+        }
+      },
+      "id": "log-instantly-error",
+      "name": "Log Instantly Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1400, 350],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  \"status\": \"error\",\n  \"message\": \"Failed to add lead to Instantly\",\n  \"error\": $('create-instantly-lead').first()?.json?.message || 'Unknown error',\n  \"lead_data\": {\n    \"email\": $('determine-campaign-assignment').first().json.leadData.email,\n    \"company\": $('determine-campaign-assignment').first().json.leadData.companyName,\n    \"lead_score\": $('determine-campaign-assignment').first().json.leadData.leadScore\n  },\n  \"retry_info\": {\n    \"will_retry\": true,\n    \"next_attempt\": \"15 minutes\"\n  }\n}) }}",
+        "options": {
+          "responseCode": 500
+        }
+      },
+      "id": "error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1600, 350]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  \"status\": \"error\",\n  \"message\": \"Invalid input parameters for CRM integration\",\n  \"required\": [\"analysisId\", \"actionType\"],\n  \"headers\": [\"x-api-key\"]\n}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "validation-error-response",
+      "name": "Validation Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [400, 350]
+    }
+  ],
+  "connections": {
+    "CRM Integration Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Fetch Company Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Automation Opportunities", 
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validation Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Company Data": {
+      "main": [
+        [
+          {
+            "node": "Prepare Instantly Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Automation Opportunities": {
+      "main": [
+        [
+          {
+            "node": "Prepare Instantly Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Instantly Data": {
+      "main": [
+        [
+          {
+            "node": "Determine Campaign Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Determine Campaign Assignment": {
+      "main": [
+        [
+          {
+            "node": "Create Instantly Lead",
+            "type": "main", 
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Instantly Lead": {
+      "main": [
+        [
+          {
+            "node": "Check Instantly Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Instantly Response": {
+      "main": [
+        [
+          {
+            "node": "Add Lead to Sequence",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Instantly Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Lead to Sequence": {
+      "main": [
+        [
+          {
+            "node": "Create Integration Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Integration Record": {
+      "main": [
+        [
+          {
+            "node": "Check Priority Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Priority Alert": {
+      "main": [
+        [
+          {
+            "node": "Send Priority Alert to Slack",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate AI Talking Points",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Priority Alert to Slack": {
+      "main": [
+        [
+          {
+            "node": "Log AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Talking Points": {
+      "main": [
+        [
+          {
+            "node": "Log AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log AI Analysis": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Instantly Error": {
+      "main": [
+        [
+          {
+            "node": "Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": {
+      "id": "error-handler-workflow"
+    },
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": {},
+  "tags": [
+    {
+      "createdAt": "2025-01-15T10:00:00.000Z",
+      "updatedAt": "2025-08-25T10:00:00.000Z",
+      "id": "prospect-intelligence",
+      "name": "Prospect Intelligence"
+    },
+    {
+      "createdAt": "2025-08-25T10:00:00.000Z",
+      "updatedAt": "2025-08-25T10:00:00.000Z",
+      "id": "instantly-integration",
+      "name": "Instantly Integration"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-08-25T10:00:00.000Z",
+  "versionId": "5"
+}

@@ -1,0 +1,149 @@
+{
+  "name": "Prospect Intelligence - Automation Opportunity Detection",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "automation-opportunity-detection",
+        "options": {
+          "enableCors": true
+        },
+        "authentication": "headerAuth"
+      },
+      "id": "opportunity-webhook",
+      "name": "Opportunity Detection Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 200],
+      "webhookId": "automation-opportunity-trigger"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "validate-analysis-id",
+              "leftValue": "={{ $json.analysisId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "validate-api-key",
+              "leftValue": "={{ $json.headers['x-api-key'] }}",
+              "rightValue": "={{ $env.N8N_INTERNAL_API_KEY }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "validate-opportunity-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [400, 200]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "prospect_analyses"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "id",
+              "condition": "equal",
+              "value": "={{ $json.analysisId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-analysis-data",
+      "name": "Fetch Analysis Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [600, 150],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "options": {
+          "baseURL": "={{ $env.AZURE_OPENAI_ENDPOINT }}",
+          "headers": {
+            "api-key": "={{ $env.AZURE_OPENAI_API_KEY }}"
+          }
+        },
+        "model": "gpt-4",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a senior business automation consultant specializing in ROI calculations for service businesses. Analyze the provided business data and calculate specific automation opportunities with detailed ROI projections. Focus on time savings, cost reductions, and revenue improvements. Respond only with valid JSON."
+            },
+            {
+              "role": "user",
+              "content": "=Analyze this business for automation opportunities and calculate ROI:\n\nBusiness Model: {{ JSON.stringify($json.business_model) }}\nTeam Structure: {{ JSON.stringify($json.team_structure) }}\nAutomation Assessment: {{ JSON.stringify($json.automation_assessment) }}\nOpportunity Indicators: {{ JSON.stringify($json.opportunity_indicators) }}\nLead Capture: {{ JSON.stringify($json.lead_capture) }}\nRecommended Package: {{ $json.recommended_package }}\n\nProvide analysis in this exact JSON format:\n{\n  \"automationOpportunities\": [\n    {\n      \"category\": \"lead-management|customer-communication|scheduling|reporting|billing|inventory\",\n      \"description\": \"specific process description\",\n      \"currentTimeSpent\": \"hours per week\",\n      \"potentialTimeSavings\": \"percentage reduction\",\n      \"implementationEffort\": \"low|medium|high\",\n      \"priority\": \"high|medium|low\"\n    }\n  ],\n  \"roiCalculations\": {\n    \"basicPackage\": {\n      \"investment\": 2500,\n      \"monthlyTimeSavings\": \"hours\",\n      \"monthlyMoneySavings\": \"dollars\",\n      \"paybackPeriodMonths\": \"number\",\n      \"yearOneROI\": \"percentage\",\n      \"applicableProcesses\": [\"process1\", \"process2\"]\n    },\n    \"professionalPackage\": {\n      \"investment\": 7500,\n      \"monthlyTimeSavings\": \"hours\",\n      \"monthlyMoneySavings\": \"dollars\",\n      \"paybackPeriodMonths\": \"number\",\n      \"yearOneROI\": \"percentage\",\n      \"applicableProcesses\": [\"process1\", \"process2\", \"process3\"]\n    },\n    \"enterprisePackage\": {\n      \"investment\": 15000,\n      \"monthlyTimeSavings\": \"hours\",\n      \"monthlyMoneySavings\": \"dollars\",\n      \"paybackPeriodMonths\": \"number\",\n      \"yearOneROI\": \"percentage\",\n      \"applicableProcesses\": [\"process1\", \"process2\", \"process3\", \"process4\"]\n    }\n  },\n  \"implementationPlan\": {\n    \"phase1\": {\n      \"duration\": \"weeks\",\n      \"processes\": [\"process1\"],\n      \"expectedImpact\": \"description\"\n    },\n    \"phase2\": {\n      \"duration\": \"weeks\",\n      \"processes\": [\"process2\"],\n      \"expectedImpact\": \"description\"\n    },\n    \"phase3\": {\n      \"duration\": \"weeks\",\n      \"processes\": [\"process3\"],\n      \"expectedImpact\": \"description\"\n    }\n  },\n  \"riskAssessment\": {\n    \"implementationRisks\": [\"risk1\", \"risk2\"],\n    \"mitigationStrategies\": [\"strategy1\", \"strategy2\"],\n    \"successFactors\": [\"factor1\", \"factor2\"]\n  },\n  \"recommendations\": {\n    \"primaryPackage\": \"basic|professional|enterprise\",\n    \"justification\": \"detailed reasoning\",\n    \"quickWins\": [\"win1\", \"win2\"],\n    \"longTermGoals\": [\"goal1\", \"goal2\"]\n  },\n  \"confidenceLevel\": 0.95\n}"
+            }
+          ]
+        },
+        "temperature": 0.2,
+        "maxTokens": 2000
+      },
+      "id": "calculate-roi",
+      "name": "Calculate ROI with Azure OpenAI",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [800, 150],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and enhance ROI calculations with business logic\nconst aiResponse = $input.first().json.message?.content || '{}';\nconst analysisData = $('fetch-analysis-data').first().json;\n\ntry {\n  const roiAnalysis = JSON.parse(aiResponse);\n  \n  // Business logic for ROI calculations based on team size and industry\n  const teamSize = analysisData.team_structure?.estimatedSize || '1-5';\n  const businessType = analysisData.business_model?.type || 'other';\n  \n  // Hourly rate assumptions based on business type\n  const hourlyRates = {\n    'field-service': 75,\n    'professional-service': 125,\n    'consulting': 150,\n    'retail': 50,\n    'other': 85\n  };\n  \n  const baseHourlyRate = hourlyRates[businessType] || 85;\n  \n  // Team size multipliers for time savings\n  const teamMultipliers = {\n    '1-5': 1.0,\n    '6-20': 1.5,\n    '21-50': 2.0,\n    '51-100': 2.5,\n    '100+': 3.0\n  };\n  \n  const teamMultiplier = teamMultipliers[teamSize] || 1.0;\n  \n  // Enhanced ROI calculations\n  const enhancedROI = {\n    ...roiAnalysis,\n    businessContext: {\n      teamSize: teamSize,\n      businessType: businessType,\n      hourlyRate: baseHourlyRate,\n      teamMultiplier: teamMultiplier\n    },\n    roiCalculations: {\n      basicPackage: {\n        ...roiAnalysis.roiCalculations?.basicPackage,\n        investment: 2500,\n        monthlyTimeSavings: Math.round(10 * teamMultiplier),\n        monthlyMoneySavings: Math.round(10 * teamMultiplier * baseHourlyRate),\n        paybackPeriodMonths: Math.ceil(2500 / (10 * teamMultiplier * baseHourlyRate)),\n        yearOneROI: Math.round(((12 * 10 * teamMultiplier * baseHourlyRate - 2500) / 2500) * 100)\n      },\n      professionalPackage: {\n        ...roiAnalysis.roiCalculations?.professionalPackage,\n        investment: 7500,\n        monthlyTimeSavings: Math.round(25 * teamMultiplier),\n        monthlyMoneySavings: Math.round(25 * teamMultiplier * baseHourlyRate),\n        paybackPeriodMonths: Math.ceil(7500 / (25 * teamMultiplier * baseHourlyRate)),\n        yearOneROI: Math.round(((12 * 25 * teamMultiplier * baseHourlyRate - 7500) / 7500) * 100)\n      },\n      enterprisePackage: {\n        ...roiAnalysis.roiCalculations?.enterprisePackage,\n        investment: 15000,\n        monthlyTimeSavings: Math.round(50 * teamMultiplier),\n        monthlyMoneySavings: Math.round(50 * teamMultiplier * baseHourlyRate),\n        paybackPeriodMonths: Math.ceil(15000 / (50 * teamMultiplier * baseHourlyRate)),\n        yearOneROI: Math.round(((12 * 50 * teamMultiplier * baseHourlyRate - 15000) / 15000) * 100)\n      }\n    },\n    analysisId: analysisData.id,\n    calculationTimestamp: new Date().toISOString()\n  };\n  \n  return [{ json: enhancedROI }];\n  \n} catch (error) {\n  // Fallback ROI calculations if AI parsing fails\n  const fallbackROI = {\n    automationOpportunities: [\n      {\n        category: 'lead-management',\n        description: 'Automate lead capture and initial response',\n        currentTimeSpent: '5 hours per week',\n        potentialTimeSavings: '80%',\n        implementationEffort: 'low',\n        priority: 'high'\n      },\n      {\n        category: 'customer-communication',\n        description: 'Implement automated follow-up sequences',\n        currentTimeSpent: '8 hours per week',\n        potentialTimeSavings: '70%',\n        implementationEffort: 'medium',\n        priority: 'high'\n      }\n    ],\n    roiCalculations: {\n      basicPackage: {\n        investment: 2500,\n        monthlyTimeSavings: 10,\n        monthlyMoneySavings: 750,\n        paybackPeriodMonths: 4,\n        yearOneROI: 260,\n        applicableProcesses: ['Lead Management', 'Basic Automation']\n      },\n      professionalPackage: {\n        investment: 7500,\n        monthlyTimeSavings: 25,\n        monthlyMoneySavings: 1875,\n        paybackPeriodMonths: 4,\n        yearOneROI: 200,\n        applicableProcesses: ['Lead Management', 'Customer Communication', 'Scheduling']\n      },\n      enterprisePackage: {\n        investment: 15000,\n        monthlyTimeSavings: 50,\n        monthlyMoneySavings: 3750,\n        paybackPeriodMonths: 4,\n        yearOneROI: 200,\n        applicableProcesses: ['Full Process Automation', 'Advanced Analytics', 'Integration Suite']\n      }\n    },\n    implementationPlan: {\n      phase1: {\n        duration: '2 weeks',\n        processes: ['Lead Capture Automation'],\n        expectedImpact: 'Immediate improvement in response time'\n      },\n      phase2: {\n        duration: '4 weeks',\n        processes: ['Customer Communication Automation'],\n        expectedImpact: 'Consistent follow-up and nurturing'\n      },\n      phase3: {\n        duration: '6 weeks',\n        processes: ['Advanced Workflow Integration'],\n        expectedImpact: 'End-to-end process optimization'\n      }\n    },\n    recommendations: {\n      primaryPackage: analysisData.recommended_package || 'basic',\n      justification: 'Based on current automation level and business size',\n      quickWins: ['Automated lead responses', 'Basic scheduling'],\n      longTermGoals: ['Full process automation', 'Advanced analytics']\n    },\n    analysisId: analysisData.id,\n    calculationTimestamp: new Date().toISOString(),\n    confidenceLevel: 0.7,\n    error: 'AI analysis parsing failed, using fallback calculations'\n  };\n  \n  return [{ json: fallbackROI }];\n}"
+      },
+      "id": "enhance-roi-calculations",
+      "name": "Enhance ROI Calculations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1000, 150]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "automation_opportunities"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "analysis_id": "={{ $json.analysisId }}",
+            "opportunities": "={{ JSON.stringify($json.automationOpportunities) }}",
+            "roi_calculations": "={{ JSON.stringify($json.roiCalculations) }}",
+            "implementation_plan": "={{ JSON.stringify($json.implementationPlan) }}",
+            "risk_assessment": "={{ JSON.stringify($json.riskAssessment) }}",
+            "recommendations": "={{ JSON.stringify($json.recommendations) }}",
+            "confidence_level": "={{ $json.confidenceLevel }}",
+            "calculation_timestamp": "={{ $json.calculationTimestamp }}",\n            \"status\": \"completed\"\n          }\n        },\n        \"options\": {\n          \"queryReplacement\": \"id,analysis_id,opportunities,roi_calculations,implementation_plan,risk_assessment,recommendations,confidence_level,calculation_timestamp,status,created_at,updated_at\"\n        }\n      },\n      \"id\": \"store-opportunities\",\n      \"name\": \"Store Opportunities in PostgreSQL\",\n      \"type\": \"n8n-nodes-base.postgres\",\n      \"typeVersion\": 2.4,\n      \"position\": [1200, 150],\n      \"credentials\": {\n        \"postgres\": {\n          \"id\": \"azure-postgres-credentials\",\n          \"name\": \"Azure PostgreSQL\"\n        }\n      }\n    },\n    {\n      \"parameters\": {\n        \"method\": \"POST\",\n        \"url\": \"http://localhost:5678/webhook/report-generation\",\n        \"sendHeaders\": true,\n        \"headerParameters\": {\n          \"parameters\": [\n            {\n              \"name\": \"Content-Type\",\n              \"value\": \"application/json\"\n            },\n            {\n              \"name\": \"x-api-key\",\n              \"value\": \"={{ $env.N8N_INTERNAL_API_KEY }}\"\n            }\n          ]\n        },\n        \"sendBody\": true,\n        \"contentType\": \"json\",\n        \"body\": \"={{ JSON.stringify({\n  \\\"analysisId\\\": $json.analysisId,\n  \\\"opportunityId\\\": $('store-opportunities').first().json.id,\n  \\\"recommendedPackage\\\": $json.recommendations.primaryPackage,\n  \\\"roiData\\\": $json.roiCalculations,\n  \\\"reportType\\\": \\\"automation-opportunity\\\"\n}) }}\",\n        \"options\": {\n          \"timeout\": 15000\n        }\n      },\n      \"id\": \"trigger-report-generation\",\n      \"name\": \"Trigger Report Generation\",\n      \"type\": \"n8n-nodes-base.httpRequest\",\n      \"typeVersion\": 3,\n      \"position\": [1400, 150],\n      \"onError\": \"continueRegularOutput\"\n    },\n    {\n      \"parameters\": {\n        \"method\": \"POST\",\n        \"url\": \"http://localhost:5678/webhook/crm-integration\",\n        \"sendHeaders\": true,\n        \"headerParameters\": {\n          \"parameters\": [\n            {\n              \"name\": \"Content-Type\",\n              \"value\": \"application/json\"\n            },\n            {\n              \"name\": \"x-api-key\",\n              \"value\": \"={{ $env.N8N_INTERNAL_API_KEY }}\"\n            }\n          ]\n        },\n        \"sendBody\": true,\n        \"contentType\": \"json\",\n        \"body\": \"={{ JSON.stringify({\n  \\\"analysisId\\\": $json.analysisId,\n  \\\"leadScore\\\": Math.round($json.confidenceLevel * 100),\n  \\\"recommendedPackage\\\": $json.recommendations.primaryPackage,\n  \\\"estimatedROI\\\": $json.roiCalculations[$json.recommendations.primaryPackage + 'Package']?.yearOneROI,\n  \\\"actionType\\\": \\\"opportunity-calculated\\\"\n}) }}\",\n        \"options\": {\n          \"timeout\": 10000\n        }\n      },\n      \"id\": \"trigger-crm-update\",\n      \"name\": \"Trigger CRM Update\",\n      \"type\": \"n8n-nodes-base.httpRequest\",\n      \"typeVersion\": 3,\n      \"position\": [1400, 300]\n    },\n    {\n      \"parameters\": {\n        \"respondWith\": \"json\",\n        \"responseBody\": \"={{ JSON.stringify({\n  \\\"status\\\": \\\"success\\\",\n  \\\"message\\\": \\\"Automation opportunities calculated successfully\\\",\n  \\\"opportunityId\\\": $('store-opportunities').first().json.id,\n  \\\"recommendedPackage\\\": $json.recommendations.primaryPackage,\n  \\\"estimatedROI\\\": $json.roiCalculations[$json.recommendations.primaryPackage + 'Package']?.yearOneROI + '%',\n  \\\"paybackPeriod\\\": $json.roiCalculations[$json.recommendations.primaryPackage + 'Package']?.paybackPeriodMonths + ' months',\n  \\\"nextSteps\\\": [\\\"Report generation triggered\\\", \\\"CRM update initiated\\\"]\n}) }}\"\n      },\n      \"id\": \"success-opportunity-response\",\n      \"name\": \"Success Response\",\n      \"type\": \"n8n-nodes-base.respondToWebhook\",\n      \"typeVersion\": 1,\n      \"position\": [1600, 200]\n    },\n    {\n      \"parameters\": {\n        \"respondWith\": \"json\",\n        \"responseBody\": \"={{ JSON.stringify({\n  \\\"status\\\": \\\"error\\\",\n  \\\"message\\\": \\\"Invalid input parameters for opportunity detection\\\",\n  \\\"required\\\": [\\\"analysisId\\\"],\n  \\\"headers\\\": [\\\"x-api-key\\\"]\n}) }}\",\n        \"options\": {\n          \"responseCode\": 400\n        }\n      },\n      \"id\": \"error-opportunity-response\",\n      \"name\": \"Error Response\",\n      \"type\": \"n8n-nodes-base.respondToWebhook\",\n      \"typeVersion\": 1,\n      \"position\": [400, 350]\n    },\n    {\n      \"parameters\": {\n        \"operation\": \"insert\",\n        \"schema\": {\n          \"value\": \"public\"\n        },\n        \"table\": {\n          \"value\": \"workflow_logs\"\n        },\n        \"columns\": {\n          \"mappingMode\": \"defineBelow\",\n          \"value\": {\n            \"workflow_name\": \"automation-opportunity-detection\",\n            \"status\": \"error\",\n            \"error_message\": \"={{ $json.error?.message || 'Unknown error in opportunity detection' }}\",\n            \"input_data\": \"={{ JSON.stringify($('opportunity-webhook').first().json) }}\",\n            \"timestamp\": \"={{ new Date().toISOString() }}\"\n          }\n        }\n      },\n      \"id\": \"log-opportunity-error\",\n      \"name\": \"Log Error\",\n      \"type\": \"n8n-nodes-base.postgres\",\n      \"typeVersion\": 2.4,\n      \"position\": [600, 350],\n      \"credentials\": {\n        \"postgres\": {\n          \"id\": \"azure-postgres-credentials\",\n          \"name\": \"Azure PostgreSQL\"\n        }\n      }\n    }\n  ],\n  \"connections\": {\n    \"Opportunity Detection Webhook\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Validate Input\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Validate Input\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Fetch Analysis Data\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ],\n        [\n          {\n            \"node\": \"Error Response\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Fetch Analysis Data\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Calculate ROI with Azure OpenAI\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Calculate ROI with Azure OpenAI\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Enhance ROI Calculations\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ],\n        [\n          {\n            \"node\": \"Log Error\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Enhance ROI Calculations\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Store Opportunities in PostgreSQL\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Store Opportunities in PostgreSQL\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Trigger Report Generation\",\n            \"type\": \"main\",\n            \"index\": 0\n          },\n          {\n            \"node\": \"Trigger CRM Update\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Trigger Report Generation\": {\n      \"main\": [\n        [\n          {\n            \"node\": \"Success Response\",\n            \"type\": \"main\",\n            \"index\": 0\n          }\n        ]\n      ]\n    },\n    \"Trigger CRM Update\": {\n      \"main\": [\n        []\n      ]\n    }\n  },\n  \"settings\": {\n    \"errorWorkflow\": {\n      \"id\": \"error-handler-workflow\"\n    },\n    \"saveManualExecutions\": true,\n    \"callerPolicy\": \"workflowsFromSameOwner\"\n  },\n  \"staticData\": {},\n  \"tags\": [\n    {\n      \"createdAt\": \"2025-01-15T10:00:00.000Z\",\n      \"updatedAt\": \"2025-01-15T10:00:00.000Z\",\n      \"id\": \"prospect-intelligence\",\n      \"name\": \"Prospect Intelligence\"\n    }\n  ],\n  \"triggerCount\": 1,\n  \"updatedAt\": \"2025-01-15T10:00:00.000Z\",\n  \"versionId\": \"2\"\n}

@@ -1,0 +1,660 @@
+{
+  "name": "Instantly Campaign Performance & Optimization",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "value": 4
+            }
+          ]
+        }
+      },
+      "id": "campaign-optimization-schedule",
+      "name": "Campaign Optimization Schedule",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [200, 200]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.instantly.ai/api/v1/campaigns",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.INSTANTLY_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch-instantly-campaigns",
+      "name": "Fetch Instantly Campaigns",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [400, 200]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "instantly_campaigns"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "campaign_status",
+              "condition": "equal",
+              "value": "active"
+            }
+          ]
+        }
+      },
+      "id": "fetch-local-campaigns",
+      "name": "Fetch Local Campaign Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [400, 300],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process and analyze campaign performance data\nconst instantlyCampaigns = $('fetch-instantly-campaigns').first().json.data || [];\nconst localCampaigns = $('fetch-local-campaigns').all().map(item => item.json);\n\n// Create performance analysis for each campaign\nconst campaignAnalysis = [];\n\nfor (const campaign of instantlyCampaigns) {\n  const localData = localCampaigns.find(local => local.instantly_campaign_id === campaign.id);\n  \n  if (!localData) continue; // Skip campaigns not in our system\n  \n  // Calculate performance metrics\n  const totalSent = campaign.stats?.total_sent || 0;\n  const totalOpened = campaign.stats?.total_opened || 0;\n  const totalClicked = campaign.stats?.total_clicked || 0;\n  const totalReplied = campaign.stats?.total_replied || 0;\n  const totalBounced = campaign.stats?.total_bounced || 0;\n  const totalUnsubscribed = campaign.stats?.total_unsubscribed || 0;\n  \n  // Calculate rates\n  const openRate = totalSent > 0 ? (totalOpened / totalSent * 100).toFixed(2) : 0;\n  const clickRate = totalOpened > 0 ? (totalClicked / totalOpened * 100).toFixed(2) : 0;\n  const replyRate = totalSent > 0 ? (totalReplied / totalSent * 100).toFixed(2) : 0;\n  const bounceRate = totalSent > 0 ? (totalBounced / totalSent * 100).toFixed(2) : 0;\n  const unsubscribeRate = totalSent > 0 ? (totalUnsubscribed / totalSent * 100).toFixed(2) : 0;\n  \n  // Performance scoring (0-100)\n  let performanceScore = 0;\n  performanceScore += Math.min(openRate * 2, 50); // Open rate worth up to 50 points\n  performanceScore += Math.min(clickRate * 5, 25); // Click rate worth up to 25 points\n  performanceScore += Math.min(replyRate * 10, 25); // Reply rate worth up to 25 points\n  performanceScore = Math.max(0, performanceScore - (bounceRate * 2)); // Penalty for bounces\n  performanceScore = Math.max(0, performanceScore - (unsubscribeRate * 5)); // Penalty for unsubscribes\n  \n  // Determine performance status\n  let performanceStatus = 'poor';\n  if (performanceScore >= 80) performanceStatus = 'excellent';\n  else if (performanceScore >= 60) performanceStatus = 'good';\n  else if (performanceScore >= 40) performanceStatus = 'average';\n  \n  // Generate recommendations\n  const recommendations = [];\n  \n  if (openRate < 20) {\n    recommendations.push('Improve subject lines - open rate below industry average');\n  }\n  if (clickRate < 3 && totalOpened > 50) {\n    recommendations.push('Optimize email content and CTAs - low click-through rate');\n  }\n  if (replyRate < 1 && totalSent > 100) {\n    recommendations.push('Personalize outreach and improve value proposition');\n  }\n  if (bounceRate > 5) {\n    recommendations.push('URGENT: Review email list quality - high bounce rate affecting deliverability');\n  }\n  if (unsubscribeRate > 2) {\n    recommendations.push('Review targeting and message relevance - high unsubscribe rate');\n  }\n  \n  // Delivery health assessment\n  let deliveryHealth = 'good';\n  if (bounceRate > 10 || unsubscribeRate > 3) {\n    deliveryHealth = 'critical';\n  } else if (bounceRate > 5 || unsubscribeRate > 1.5) {\n    deliveryHealth = 'warning';\n  }\n  \n  // A/B test opportunities\n  const abTestOpportunities = [];\n  if (openRate < 25) abTestOpportunities.push('subject_lines');\n  if (clickRate < 3) abTestOpportunities.push('email_content');\n  if (replyRate < 1.5) abTestOpportunities.push('personalization');\n  \n  campaignAnalysis.push({\n    // Campaign identification\n    campaignId: campaign.id,\n    campaignName: campaign.name,\n    localCampaignId: localData.id,\n    targetServiceTier: localData.target_service_tier,\n    \n    // Performance metrics\n    totalSent,\n    totalOpened,\n    totalClicked, \n    totalReplied,\n    totalBounced,\n    totalUnsubscribed,\n    \n    // Calculated rates\n    openRate: parseFloat(openRate),\n    clickRate: parseFloat(clickRate),\n    replyRate: parseFloat(replyRate),\n    bounceRate: parseFloat(bounceRate),\n    unsubscribeRate: parseFloat(unsubscribeRate),\n    \n    // Analysis results\n    performanceScore: Math.round(performanceScore),\n    performanceStatus,\n    deliveryHealth,\n    recommendations,\n    abTestOpportunities,\n    \n    // Action flags\n    needsImprovement: performanceScore < 50,\n    requiresUrgentAttention: bounceRate > 10 || unsubscribeRate > 3,\n    readyForScaling: performanceScore > 70 && deliveryHealth === 'good',\n    \n    // Metadata\n    analysisTimestamp: new Date().toISOString(),\n    lastUpdated: campaign.updated_at\n  });\n}\n\n// Sort by performance score (lowest first for priority attention)\ncampaignAnalysis.sort((a, b) => a.performanceScore - b.performanceScore);\n\nreturn campaignAnalysis.map(analysis => ({ json: analysis }));"
+      },
+      "id": "analyze-campaign-performance",
+      "name": "Analyze Campaign Performance",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [600, 250]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "instantly_campaigns"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "id",
+              "condition": "equal",
+              "value": "={{ $json.localCampaignId }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "total_leads_added": "={{ $json.totalSent }}",
+            "total_emails_sent": "={{ $json.totalSent }}",
+            "total_opens": "={{ $json.totalOpened }}",
+            "total_clicks": "={{ $json.totalClicked }}",
+            "total_replies": "={{ $json.totalReplied }}",
+            "total_bounces": "={{ $json.totalBounced }}",
+            "total_unsubscribes": "={{ $json.totalUnsubscribed }}",
+            "overall_open_rate": "={{ $json.openRate }}",
+            "overall_click_rate": "={{ $json.clickRate }}",
+            "overall_reply_rate": "={{ $json.replyRate }}",
+            "overall_bounce_rate": "={{ $json.bounceRate }}"
+          }
+        }
+      },
+      "id": "update-campaign-metrics",
+      "name": "Update Campaign Metrics",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [800, 250],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "requires-urgent-attention",
+              "leftValue": "={{ $json.requiresUrgentAttention }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-urgent-issues",
+      "name": "Check Urgent Issues",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"text\": \"🚨 URGENT: Campaign Deliverability Issue Detected\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": {\n        \"type\": \"plain_text\",\n        \"text\": \"🚨 Critical Campaign Issue - Immediate Action Required\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Campaign:* ${$json.campaignName}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Service Tier:* ${$json.targetServiceTier?.toUpperCase() || 'Unknown'}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Performance Score:* ${$json.performanceScore}/100`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Delivery Health:* ${$json.deliveryHealth.toUpperCase()}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Bounce Rate:* ${$json.bounceRate}%`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Unsubscribe Rate:* ${$json.unsubscribeRate}%`\n        }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": `*Critical Actions Needed:*\\n${$json.recommendations.filter(rec => rec.includes('URGENT')).map(rec => `• ${rec}`).join('\\n')}`\n      }\n    },\n    {\n      \"type\": \"actions\",\n      \"elements\": [\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"Pause Campaign\"\n          },\n          \"style\": \"danger\",\n          \"url\": `https://app.instantly.ai/app/campaigns/${$json.campaignId}`\n        },\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"View Analytics\"\n          },\n          \"url\": `https://app.instantly.ai/app/campaigns/${$json.campaignId}/analytics`\n        }\n      ]\n    }\n  ]\n}) }}"
+      },
+      "id": "send-urgent-alert",
+      "name": "Send Urgent Deliverability Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1200, 150],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.instantly.ai/api/v1/campaigns/pause",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.INSTANTLY_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"campaign_id\": $json.campaignId,\n  \"reason\": \"Auto-paused due to high bounce/unsubscribe rate\",\n  \"notes\": `Performance score: ${$json.performanceScore}/100, Bounce rate: ${$json.bounceRate}%, Unsubscribe rate: ${$json.unsubscribeRate}%`\n}) }}"
+      },
+      "id": "auto-pause-problematic-campaign",
+      "name": "Auto-Pause Problematic Campaign",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1400, 150],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "ready-for-scaling",
+              "leftValue": "={{ $json.readyForScaling }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-scaling-opportunity",
+      "name": "Check Scaling Opportunity",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 350]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"text\": \"🚀 High Performing Campaign - Scaling Opportunity\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": {\n        \"type\": \"plain_text\",\n        \"text\": \"🚀 Campaign Scaling Opportunity Identified\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Campaign:* ${$json.campaignName}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Service Tier:* ${$json.targetServiceTier?.toUpperCase() || 'Unknown'}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Performance Score:* ${$json.performanceScore}/100 ⭐`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Open Rate:* ${$json.openRate}%`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Reply Rate:* ${$json.replyRate}%`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Total Sent:* ${$json.totalSent}`\n        }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": \"*Scaling Recommendations:*\\n• Increase daily sending volume\\n• Expand target audience with similar characteristics\\n• Create A/B tests for further optimization\\n• Consider duplicating successful elements for other campaigns\"\n      }\n    },\n    {\n      \"type\": \"actions\",\n      \"elements\": [\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"Scale Campaign\"\n          },\n          \"style\": \"primary\",\n          \"url\": `https://app.instantly.ai/app/campaigns/${$json.campaignId}`\n        }\n      ]\n    }\n  ]\n}) }}"
+      },
+      "id": "send-scaling-opportunity",
+      "name": "Send Scaling Opportunity Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1200, 350],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "needs-improvement",
+              "leftValue": "={{ $json.needsImprovement }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-improvement-needs",
+      "name": "Check Improvement Needs",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 500]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.CLAUDE_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"model\": \"claude-3-sonnet-20240229\",\n  \"max_tokens\": 1000,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": `Analyze this underperforming email campaign and provide specific optimization recommendations:\\n\\nCampaign: ${$json.campaignName}\\nTarget: ${$json.targetServiceTier} service tier\\nPerformance Score: ${$json.performanceScore}/100\\n\\nMetrics:\\n- Open Rate: ${$json.openRate}% (Industry avg: 25%)\\n- Click Rate: ${$json.clickRate}% (Industry avg: 3%)\\n- Reply Rate: ${$json.replyRate}% (Industry avg: 1.5%)\\n- Bounce Rate: ${$json.bounceRate}%\\n- Unsubscribe Rate: ${$json.unsubscribeRate}%\\n\\nCurrent Recommendations: ${$json.recommendations.join(', ')}\\n\\nProvide detailed optimization strategies for:\\n1. Subject line improvements (5 specific examples)\\n2. Email content optimization\\n3. Personalization enhancements\\n4. Timing and frequency adjustments\\n5. A/B test opportunities\\n6. Audience targeting refinements\\n\\nResponse in JSON format with keys: subject_lines, content_optimization, personalization, timing, ab_tests, audience_targeting`\n    }\n  ]\n}) }}"
+      },
+      "id": "generate-optimization-recommendations",
+      "name": "Generate AI Optimization Recommendations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1200, 500],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process AI optimization recommendations\nconst campaignData = $('check-improvement-needs').first().json;\nconst claudeResponse = $('generate-optimization-recommendations').first().json;\n\nlet optimizationPlan = {\n  campaignId: campaignData.campaignId,\n  campaignName: campaignData.campaignName,\n  performanceScore: campaignData.performanceScore,\n  currentIssues: campaignData.recommendations,\n  aiRecommendations: null,\n  actionPlan: [],\n  priority: 'medium'\n};\n\n// Parse Claude's response\ntry {\n  if (claudeResponse.content && claudeResponse.content[0] && claudeResponse.content[0].text) {\n    const analysisText = claudeResponse.content[0].text;\n    const jsonMatch = analysisText.match(/\\{[\\s\\S]*\\}/);\n    \n    if (jsonMatch) {\n      const aiRecommendations = JSON.parse(jsonMatch[0]);\n      optimizationPlan.aiRecommendations = aiRecommendations;\n      \n      // Create prioritized action plan\n      const actionPlan = [];\n      \n      // Priority 1: Fix urgent issues first\n      if (campaignData.bounceRate > 5) {\n        actionPlan.push({\n          priority: 1,\n          action: 'Clean email list and improve data quality',\n          impact: 'high',\n          effort: 'medium',\n          timeline: 'immediate'\n        });\n      }\n      \n      // Priority 2: Improve low-performing metrics\n      if (campaignData.openRate < 20) {\n        actionPlan.push({\n          priority: 2,\n          action: 'A/B test new subject lines',\n          details: aiRecommendations.subject_lines?.slice(0, 3) || ['Test urgent vs value-based subjects'],\n          impact: 'high',\n          effort: 'low',\n          timeline: 'this_week'\n        });\n      }\n      \n      if (campaignData.clickRate < 2) {\n        actionPlan.push({\n          priority: 2,\n          action: 'Optimize email content and CTAs',\n          details: aiRecommendations.content_optimization || 'Improve value proposition and CTA placement',\n          impact: 'medium',\n          effort: 'medium',\n          timeline: 'this_week'\n        });\n      }\n      \n      if (campaignData.replyRate < 1) {\n        actionPlan.push({\n          priority: 3,\n          action: 'Enhance personalization',\n          details: aiRecommendations.personalization || 'Add company-specific value propositions',\n          impact: 'medium',\n          effort: 'high',\n          timeline: 'next_week'\n        });\n      }\n      \n      // Add A/B testing opportunities\n      if (aiRecommendations.ab_tests) {\n        actionPlan.push({\n          priority: 3,\n          action: 'Implement A/B tests',\n          details: aiRecommendations.ab_tests,\n          impact: 'medium',\n          effort: 'low',\n          timeline: 'ongoing'\n        });\n      }\n      \n      optimizationPlan.actionPlan = actionPlan;\n      optimizationPlan.priority = campaignData.performanceScore < 30 ? 'high' : \n                                 campaignData.performanceScore < 50 ? 'medium' : 'low';\n    }\n} catch (error) {\n  optimizationPlan.aiRecommendations = {\n    error: 'Failed to parse AI recommendations',\n    raw_response: claudeResponse\n  };\n  \n  // Fallback action plan\n  optimizationPlan.actionPlan = [\n    {\n      priority: 1,\n      action: 'Manual campaign review required',\n      impact: 'unknown',\n      effort: 'high',\n      timeline: 'asap'\n    }\n  ];\n}\n\nreturn [{ json: optimizationPlan }];"
+      },
+      "id": "process-optimization-plan",
+      "name": "Process Optimization Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1400, 500]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "instantly_deliverability"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tenant_id": "550e8400-e29b-41d4-a716-446655440001",
+            "tracking_date": "={{ new Date().toISOString().split('T')[0] }}",
+            "tracking_period": "daily",
+            "instantly_account_id": "{{ $env.INSTANTLY_ACCOUNT_ID }}",
+            "emails_sent": "={{ $json.totalSent }}",
+            "emails_delivered": "={{ $json.totalSent - $json.totalBounced }}",
+            "emails_bounced": "={{ $json.totalBounced }}",
+            "hard_bounces": "={{ Math.round($json.totalBounced * 0.7) }}", 
+            "soft_bounces": "={{ Math.round($json.totalBounced * 0.3) }}",
+            "unsubscribes": "={{ $json.totalUnsubscribed }}",
+            "delivery_rate": "={{ $json.totalSent > 0 ? (($json.totalSent - $json.totalBounced) / $json.totalSent * 100).toFixed(2) : 0 }}",
+            "bounce_rate": "={{ $json.bounceRate }}",
+            "domain_reputation_score": "={{ $json.deliveryHealth === 'good' ? 85 : $json.deliveryHealth === 'warning' ? 65 : 35 }}",
+            "health_status": "={{ $json.deliveryHealth }}",
+            "recommendations": "={{ JSON.stringify($json.recommendations) }}"
+          }
+        }
+      },
+      "id": "log-deliverability-metrics",
+      "name": "Log Deliverability Metrics",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1600, 300],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "aggregateItems",
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "aggregate-campaign-results",
+      "name": "Aggregate Campaign Results",
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 1,
+      "position": [1800, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate comprehensive campaign performance summary\nconst allCampaigns = $input.first().json;\nconst campaigns = Array.isArray(allCampaigns) ? allCampaigns : [allCampaigns];\n\n// Calculate overall performance metrics\nconst totalCampaigns = campaigns.length;\nconst activeCampaigns = campaigns.filter(c => !c.requiresUrgentAttention).length;\nconst problematicCampaigns = campaigns.filter(c => c.requiresUrgentAttention).length;\nconst highPerformingCampaigns = campaigns.filter(c => c.readyForScaling).length;\nconst needImprovementCampaigns = campaigns.filter(c => c.needsImprovement).length;\n\n// Average performance metrics\nconst avgPerformanceScore = campaigns.reduce((sum, c) => sum + c.performanceScore, 0) / totalCampaigns;\nconst avgOpenRate = campaigns.reduce((sum, c) => sum + c.openRate, 0) / totalCampaigns;\nconst avgReplyRate = campaigns.reduce((sum, c) => sum + c.replyRate, 0) / totalCampaigns;\nconst avgBounceRate = campaigns.reduce((sum, c) => sum + c.bounceRate, 0) / totalCampaigns;\n\n// Identify top and bottom performers\nconst topPerformer = campaigns.reduce((best, current) => \n  current.performanceScore > best.performanceScore ? current : best\n);\nconst bottomPerformer = campaigns.reduce((worst, current) => \n  current.performanceScore < worst.performanceScore ? current : worst\n);\n\n// Generate insights\nconst insights = [];\n\nif (avgOpenRate < 20) {\n  insights.push('Overall open rates below industry standard - focus on subject line optimization');\n}\nif (avgReplyRate < 1.5) {\n  insights.push('Low reply rates across campaigns - improve personalization and value propositions');\n}\nif (problematicCampaigns > 0) {\n  insights.push(`${problematicCampaigns} campaign(s) require immediate attention due to deliverability issues`);\n}\nif (highPerformingCampaigns > 0) {\n  insights.push(`${highPerformingCampaigns} campaign(s) ready for scaling - consider increasing volume`);\n}\n\n// Service tier analysis\nconst tierPerformance = {};\ncampaigns.forEach(campaign => {\n  const tier = campaign.targetServiceTier || 'unknown';\n  if (!tierPerformance[tier]) {\n    tierPerformance[tier] = {\n      count: 0,\n      totalScore: 0,\n      totalReplies: 0,\n      totalSent: 0\n    };\n  }\n  tierPerformance[tier].count++;\n  tierPerformance[tier].totalScore += campaign.performanceScore;\n  tierPerformance[tier].totalReplies += campaign.totalReplied;\n  tierPerformance[tier].totalSent += campaign.totalSent;\n});\n\n// Calculate tier averages\nObject.keys(tierPerformance).forEach(tier => {\n  const data = tierPerformance[tier];\n  data.avgScore = Math.round(data.totalScore / data.count);\n  data.avgReplyRate = data.totalSent > 0 ? (data.totalReplies / data.totalSent * 100).toFixed(2) : 0;\n});\n\nconst summary = {\n  // Overview\n  totalCampaigns,\n  activeCampaigns,\n  problematicCampaigns,\n  highPerformingCampaigns,\n  needImprovementCampaigns,\n  \n  // Performance averages\n  avgPerformanceScore: Math.round(avgPerformanceScore),\n  avgOpenRate: Math.round(avgOpenRate * 100) / 100,\n  avgReplyRate: Math.round(avgReplyRate * 100) / 100,\n  avgBounceRate: Math.round(avgBounceRate * 100) / 100,\n  \n  // Top/bottom performers\n  topPerformer: {\n    name: topPerformer.campaignName,\n    score: topPerformer.performanceScore,\n    replyRate: topPerformer.replyRate\n  },\n  bottomPerformer: {\n    name: bottomPerformer.campaignName,\n    score: bottomPerformer.performanceScore,\n    replyRate: bottomPerformer.replyRate\n  },\n  \n  // Service tier analysis\n  tierPerformance,\n  \n  // Insights and recommendations\n  insights,\n  \n  // Status counts by tier\n  tierBreakdown: Object.keys(tierPerformance).map(tier => ({\n    tier,\n    campaigns: tierPerformance[tier].count,\n    avgScore: tierPerformance[tier].avgScore,\n    avgReplyRate: tierPerformance[tier].avgReplyRate\n  })),\n  \n  // Metadata\n  analysisDate: new Date().toISOString(),\n  nextAnalysis: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString() // 4 hours from now\n};\n\nreturn [{ json: summary }];"
+      },
+      "id": "generate-performance-summary",
+      "name": "Generate Performance Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"text\": \"📊 Instantly Campaign Performance Report\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": {\n        \"type\": \"plain_text\",\n        \"text\": \"📊 Instantly Campaign Performance Summary\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Total Campaigns:* ${$json.totalCampaigns}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Active Campaigns:* ${$json.activeCampaigns}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*High Performers:* ${$json.highPerformingCampaigns} 🚀`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Need Attention:* ${$json.problematicCampaigns + $json.needImprovementCampaigns} ⚠️`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Avg Performance:* ${$json.avgPerformanceScore}/100`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Avg Reply Rate:* ${$json.avgReplyRate}%`\n        }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": `*🏆 Top Performer:* ${$json.topPerformer.name} (${$json.topPerformer.score}/100)\\n*📉 Needs Focus:* ${$json.bottomPerformer.name} (${$json.bottomPerformer.score}/100)`\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": `*Key Insights:*\\n${$json.insights.map(insight => `• ${insight}`).join('\\n')}`\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": `*Performance by Service Tier:*\\n${$json.tierBreakdown.map(tier => `• ${tier.tier}: ${tier.campaigns} campaigns, ${tier.avgScore}/100 avg, ${tier.avgReplyRate}% replies`).join('\\n')}`\n      }\n    },\n    {\n      \"type\": \"actions\",\n      \"elements\": [\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"View Dashboard\"\n          },\n          \"url\": \"https://app.instantly.ai/app/dashboard\"\n        }\n      ]\n    }\n  ]\n}) }}"
+      },
+      "id": "send-performance-report",
+      "name": "Send Performance Report to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [2200, 400],
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Campaign Optimization Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch Instantly Campaigns",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Local Campaign Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Instantly Campaigns": {
+      "main": [
+        [
+          {
+            "node": "Analyze Campaign Performance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Local Campaign Data": {
+      "main": [
+        [
+          {
+            "node": "Analyze Campaign Performance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Campaign Performance": {
+      "main": [
+        [
+          {
+            "node": "Update Campaign Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Campaign Metrics": {
+      "main": [
+        [
+          {
+            "node": "Check Urgent Issues",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Scaling Opportunity",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Improvement Needs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Deliverability Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Urgent Issues": {
+      "main": [
+        [
+          {
+            "node": "Send Urgent Deliverability Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Campaign Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Urgent Deliverability Alert": {
+      "main": [
+        [
+          {
+            "node": "Auto-Pause Problematic Campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-Pause Problematic Campaign": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Campaign Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Scaling Opportunity": {
+      "main": [
+        [
+          {
+            "node": "Send Scaling Opportunity Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Campaign Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Scaling Opportunity Alert": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Campaign Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Improvement Needs": {
+      "main": [
+        [
+          {
+            "node": "Generate AI Optimization Recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate Campaign Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate AI Optimization Recommendations": {
+      "main": [
+        [
+          {
+            "node": "Process Optimization Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Optimization Plan": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Campaign Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Deliverability Metrics": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Campaign Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Campaign Results": {
+      "main": [
+        [
+          {
+            "node": "Generate Performance Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Performance Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Performance Report to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": {
+      "id": "error-handler-workflow"
+    },
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": {},
+  "tags": [
+    {
+      "createdAt": "2025-08-25T10:00:00.000Z",
+      "updatedAt": "2025-08-25T10:00:00.000Z",
+      "id": "instantly-integration",
+      "name": "Instantly Integration"
+    },
+    {
+      "createdAt": "2025-08-25T10:00:00.000Z",
+      "updatedAt": "2025-08-25T10:00:00.000Z",
+      "id": "campaign-optimization",
+      "name": "Campaign Optimization"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-08-25T10:00:00.000Z",
+  "versionId": "1"
+}

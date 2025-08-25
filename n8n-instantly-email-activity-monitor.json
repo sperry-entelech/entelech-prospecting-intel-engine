@@ -1,0 +1,783 @@
+{
+  "name": "Instantly Email Activity Monitor & Reply Analysis",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "instantly-webhook",
+        "options": {
+          "enableCors": true
+        },
+        "authentication": "headerAuth"
+      },
+      "id": "instantly-webhook",
+      "name": "Instantly Activity Webhook", 
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 200],
+      "webhookId": "instantly-activity-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "validate-activity-type",
+              "leftValue": "={{ $json.activity_type }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "validate-email",
+              "leftValue": "={{ $json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "validate-webhook-signature",
+              "leftValue": "={{ $json.headers['x-instantly-signature'] }}",
+              "rightValue": "={{ $env.INSTANTLY_WEBHOOK_SECRET }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "validate-webhook",
+      "name": "Validate Webhook",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [400, 200]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "instantly_integrations"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "instantly_lead_id",
+              "condition": "equal",
+              "value": "={{ $json.lead_id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-lead-integration",
+      "name": "Fetch Lead Integration",
+      "type": "n8n-nodes-base.postgres", 
+      "typeVersion": 2.4,
+      "position": [600, 200],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process Instantly activity data for database storage\nconst webhookData = $('instantly-webhook').first().json;\nconst integrationData = $('fetch-lead-integration').first().json;\n\n// Extract activity details\nconst activityType = webhookData.activity_type;\nconst email = webhookData.email;\nconst leadId = webhookData.lead_id;\nconst campaignId = webhookData.campaign_id;\nconst sequenceId = webhookData.sequence_id;\nconst timestamp = new Date(webhookData.timestamp).toISOString();\n\n// Process different activity types\nlet processedData = {\n  tenant_id: '550e8400-e29b-41d4-a716-446655440001',\n  integration_id: integrationData?.id,\n  company_id: integrationData?.company_id,\n  instantly_activity_id: webhookData.activity_id,\n  email_id: webhookData.email_id,\n  activity_type: activityType,\n  activity_timestamp: timestamp,\n  subject_line: webhookData.subject,\n  email_step: webhookData.sequence_step || 0,\n  sequence_position: webhookData.sequence_position || 0,\n  ip_address: webhookData.ip_address,\n  user_agent: webhookData.user_agent,\n  location_data: JSON.stringify({\n    country: webhookData.country,\n    city: webhookData.city,\n    region: webhookData.region\n  }),\n  device_type: webhookData.device_type\n};\n\n// Handle reply-specific data\nif (activityType === 'replied') {\n  processedData.reply_content = webhookData.reply_content || '';\n  processedData.needs_human_review = true; // Always flag replies for review initially\n  \n  // Basic sentiment analysis keywords\n  const replyContent = (webhookData.reply_content || '').toLowerCase();\n  const positiveKeywords = ['interested', 'yes', 'sounds good', 'tell me more', 'schedule', 'call', 'meeting', 'demo'];\n  const negativeKeywords = ['not interested', 'no', 'remove', 'unsubscribe', 'stop', 'spam', 'delete'];\n  const neutralKeywords = ['maybe', 'later', 'busy', 'think about', 'consider'];\n  \n  let sentiment = 'neutral';\n  if (positiveKeywords.some(keyword => replyContent.includes(keyword))) {\n    sentiment = 'positive';\n  } else if (negativeKeywords.some(keyword => replyContent.includes(keyword))) {\n    sentiment = 'negative';\n  }\n  \n  processedData.reply_sentiment = sentiment;\n  \n  // Determine reply intent\n  let intent = 'general_inquiry';\n  if (replyContent.includes('meeting') || replyContent.includes('call') || replyContent.includes('demo')) {\n    intent = 'meeting_request';\n  } else if (replyContent.includes('pricing') || replyContent.includes('cost') || replyContent.includes('price')) {\n    intent = 'pricing_inquiry';\n  } else if (replyContent.includes('remove') || replyContent.includes('unsubscribe')) {\n    intent = 'unsubscribe_request';\n  } else if (sentiment === 'positive') {\n    intent = 'interested';\n  } else if (sentiment === 'negative') {\n    intent = 'not_interested';\n  }\n  \n  processedData.reply_intent = intent;\n}\n\n// Add metadata for processing flags\nprocessedData.shouldUpdateEngagement = ['opened', 'clicked', 'replied'].includes(activityType);\nprocessedData.shouldTriggerAI = activityType === 'replied';\nprocessedData.shouldUpdateLeadTemp = ['replied', 'clicked'].includes(activityType);\nprocessedData.shouldNotifyTeam = activityType === 'replied' && processedData.reply_sentiment === 'positive';\n\nreturn [{ json: processedData }];"
+      },
+      "id": "process-activity-data",
+      "name": "Process Activity Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [800, 200]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "instantly_email_activities"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "tenant_id": "={{ $json.tenant_id }}",
+            "integration_id": "={{ $json.integration_id }}",
+            "company_id": "={{ $json.company_id }}",
+            "instantly_activity_id": "={{ $json.instantly_activity_id }}",
+            "email_id": "={{ $json.email_id }}",
+            "activity_type": "={{ $json.activity_type }}",
+            "activity_timestamp": "={{ $json.activity_timestamp }}",
+            "subject_line": "={{ $json.subject_line }}",
+            "email_step": "={{ $json.email_step }}",
+            "sequence_position": "={{ $json.sequence_position }}",
+            "ip_address": "={{ $json.ip_address }}",
+            "user_agent": "={{ $json.user_agent }}",
+            "location_data": "={{ $json.location_data }}",
+            "device_type": "={{ $json.device_type }}",
+            "reply_content": "={{ $json.reply_content }}",
+            "reply_sentiment": "={{ $json.reply_sentiment }}",
+            "reply_intent": "={{ $json.reply_intent }}",
+            "needs_human_review": "={{ $json.needs_human_review }}"
+          }
+        }
+      },
+      "id": "log-email-activity",
+      "name": "Log Email Activity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1000, 200],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "should-update-engagement",
+              "leftValue": "={{ $json.shouldUpdateEngagement }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-engagement-update",
+      "name": "Check Engagement Update",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1200, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate updated engagement metrics and lead temperature\nconst activityData = $input.first().json;\nconst activityType = activityData.activity_type;\nconst integrationId = activityData.integration_id;\n\n// Define engagement score updates\nlet engagementScoreIncrease = 0;\nlet newLeadTemperature = null;\nlet lastActivityUpdate = {};\n\nswitch (activityType) {\n  case 'opened':\n    engagementScoreIncrease = 2;\n    lastActivityUpdate.first_open_at = activityData.activity_timestamp;\n    lastActivityUpdate.emails_opened = 'emails_opened + 1';\n    break;\n  case 'clicked':\n    engagementScoreIncrease = 5;\n    newLeadTemperature = 'warm';\n    lastActivityUpdate.first_click_at = activityData.activity_timestamp;\n    lastActivityUpdate.emails_clicked = 'emails_clicked + 1';\n    break;\n  case 'replied':\n    engagementScoreIncrease = activityData.reply_sentiment === 'positive' ? 15 : \n                           activityData.reply_sentiment === 'negative' ? -5 : 10;\n    newLeadTemperature = activityData.reply_sentiment === 'positive' ? 'hot' : \n                        activityData.reply_sentiment === 'negative' ? 'cold' : 'warm';\n    lastActivityUpdate.first_reply_at = activityData.activity_timestamp;\n    lastActivityUpdate.emails_replied = 'emails_replied + 1';\n    lastActivityUpdate.lead_status = activityData.reply_sentiment === 'negative' ? 'unsubscribed' : 'replied';\n    break;\n  case 'sent':\n    lastActivityUpdate.emails_sent = 'emails_sent + 1';\n    lastActivityUpdate.last_email_sent_at = activityData.activity_timestamp;\n    break;\n  case 'bounced':\n    lastActivityUpdate.emails_bounced = 'emails_bounced + 1';\n    lastActivityUpdate.lead_status = 'bounced';\n    engagementScoreIncrease = -10;\n    newLeadTemperature = 'cold';\n    break;\n}\n\n// Always update last activity timestamp\nlastActivityUpdate.last_activity_at = activityData.activity_timestamp;\n\n// Calculate new engagement score (capped at 0-100)\nconst engagementUpdate = `GREATEST(0, LEAST(100, engagement_score + ${engagementScoreIncrease}))`;\n\nconst updateData = {\n  integrationId: integrationId,\n  engagementScoreUpdate: engagementUpdate,\n  leadTemperatureUpdate: newLeadTemperature,\n  fieldUpdates: lastActivityUpdate,\n  activityType: activityType,\n  shouldUpdateRates: ['opened', 'clicked', 'replied', 'sent'].includes(activityType)\n};\n\nreturn [{ json: updateData }];"
+      },
+      "id": "calculate-engagement-updates",
+      "name": "Calculate Engagement Updates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1400, 150]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "instantly_integrations"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "id",
+              "condition": "equal",
+              "value": "={{ $json.integrationId }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "engagement_score": "={{ $json.engagementScoreUpdate }}",
+            "lead_temperature": "={{ $json.leadTemperatureUpdate }}",
+            "last_activity_at": "={{ $json.fieldUpdates.last_activity_at }}",
+            "emails_sent": "={{ $json.fieldUpdates.emails_sent }}",
+            "emails_opened": "={{ $json.fieldUpdates.emails_opened }}",
+            "emails_clicked": "={{ $json.fieldUpdates.emails_clicked }}",
+            "emails_replied": "={{ $json.fieldUpdates.emails_replied }}",
+            "emails_bounced": "={{ $json.fieldUpdates.emails_bounced }}",
+            "first_open_at": "={{ $json.fieldUpdates.first_open_at }}",
+            "first_click_at": "={{ $json.fieldUpdates.first_click_at }}",
+            "first_reply_at": "={{ $json.fieldUpdates.first_reply_at }}",
+            "last_email_sent_at": "={{ $json.fieldUpdates.last_email_sent_at }}",
+            "lead_status": "={{ $json.fieldUpdates.lead_status }}"
+          }
+        }
+      },
+      "id": "update-integration-metrics",
+      "name": "Update Integration Metrics",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1600, 150],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "should-trigger-ai",
+              "leftValue": "={{ $('process-activity-data').first().json.shouldTriggerAI }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-ai-analysis",
+      "name": "Check AI Analysis",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1200, 350]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.CLAUDE_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"model\": \"claude-3-sonnet-20240229\",\n  \"max_tokens\": 1000,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": `Analyze this email reply from a prospect and provide actionable insights for our sales team:\\n\\nReply Content: \"${$('process-activity-data').first().json.reply_content}\"\\n\\nSubject: ${$('process-activity-data').first().json.subject_line}\\nSequence Step: ${$('process-activity-data').first().json.email_step}\\nInitial Sentiment: ${$('process-activity-data').first().json.reply_sentiment}\\n\\nPlease provide:\\n1. Refined sentiment analysis (positive/neutral/negative/interested/not_interested)\\n2. Intent classification (meeting_request/pricing_inquiry/general_inquiry/unsubscribe_request/interested/not_interested)\\n3. Lead qualification update (qualified/marketing_qualified/sales_qualified/unqualified)\\n4. Suggested next action for sales team\\n5. Priority level (high/medium/low)\\n6. Key talking points to address in follow-up\\n\\nRespond in JSON format with these exact keys: sentiment, intent, qualification, suggested_action, priority, talking_points (array)`\n    }\n  ]\n}) }}"
+      },
+      "id": "analyze-reply-with-claude",
+      "name": "Analyze Reply with Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1400, 350],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Claude AI analysis and prepare database update\nconst claudeResponse = $input.first().json;\nconst activityData = $('process-activity-data').first().json;\n\nlet aiAnalysis = {};\nlet leadQualificationUpdate = false;\nlet suggestedFollowUp = '';\nlet updatedSentiment = activityData.reply_sentiment;\nlet updatedIntent = activityData.reply_intent;\n\n// Try to parse Claude's response\ntry {\n  if (claudeResponse.content && claudeResponse.content[0] && claudeResponse.content[0].text) {\n    const analysisText = claudeResponse.content[0].text;\n    \n    // Extract JSON from Claude's response\n    const jsonMatch = analysisText.match(/\\{[\\s\\S]*\\}/);\n    if (jsonMatch) {\n      const parsedAnalysis = JSON.parse(jsonMatch[0]);\n      \n      // Update values with Claude's analysis\n      updatedSentiment = parsedAnalysis.sentiment || activityData.reply_sentiment;\n      updatedIntent = parsedAnalysis.intent || activityData.reply_intent;\n      suggestedFollowUp = parsedAnalysis.suggested_action || 'Manual review required';\n      \n      aiAnalysis = {\n        claude_sentiment: parsedAnalysis.sentiment,\n        claude_intent: parsedAnalysis.intent,\n        qualification_status: parsedAnalysis.qualification,\n        suggested_action: parsedAnalysis.suggested_action,\n        priority_level: parsedAnalysis.priority,\n        talking_points: parsedAnalysis.talking_points,\n        ai_confidence: 'high',\n        analysis_timestamp: new Date().toISOString()\n      };\n      \n      // Determine if lead qualification should be updated\n      if (parsedAnalysis.qualification && \n          ['qualified', 'sales_qualified', 'marketing_qualified'].includes(parsedAnalysis.qualification)) {\n        leadQualificationUpdate = true;\n      }\n    }\n  }\n} catch (error) {\n  // Fallback if Claude's response can't be parsed\n  aiAnalysis = {\n    error: 'Failed to parse AI response',\n    raw_response: claudeResponse,\n    ai_confidence: 'low',\n    analysis_timestamp: new Date().toISOString()\n  };\n  suggestedFollowUp = 'Manual review required - AI analysis failed';\n}\n\nconst analysisResult = {\n  activityId: activityData.instantly_activity_id,\n  integrationId: activityData.integration_id,\n  companyId: activityData.company_id,\n  updatedSentiment: updatedSentiment,\n  updatedIntent: updatedIntent,\n  aiAnalysis: JSON.stringify(aiAnalysis),\n  suggestedFollowUp: suggestedFollowUp,\n  leadQualificationUpdate: leadQualificationUpdate,\n  qualificationStatus: aiAnalysis.qualification_status,\n  priorityLevel: aiAnalysis.priority_level || 'medium',\n  shouldNotifyTeam: aiAnalysis.priority_level === 'high' || updatedSentiment === 'interested'\n};\n\nreturn [{ json: analysisResult }];"
+      },
+      "id": "parse-ai-analysis",
+      "name": "Parse AI Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1600, 350]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "instantly_email_activities"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "instantly_activity_id",
+              "condition": "equal",
+              "value": "={{ $json.activityId }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "reply_sentiment": "={{ $json.updatedSentiment }}",
+            "reply_intent": "={{ $json.updatedIntent }}",
+            "ai_analysis": "={{ $json.aiAnalysis }}",
+            "suggested_follow_up": "={{ $json.suggestedFollowUp }}",
+            "lead_qualification_update": "={{ $json.leadQualificationUpdate }}",
+            "needs_human_review": "={{ $json.priorityLevel === 'high' || $json.updatedSentiment === 'interested' }}"
+          }
+        }
+      },
+      "id": "update-activity-with-ai",
+      "name": "Update Activity with AI Analysis",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1800, 350],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "should-notify-team",
+              "leftValue": "={{ $json.shouldNotifyTeam }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-team-notification",
+      "name": "Check Team Notification",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2000, 350]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "companies"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "id",
+              "condition": "equal",
+              "value": "={{ $('parse-ai-analysis').first().json.companyId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-company-details",
+      "name": "Fetch Company Details",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2200, 300],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"text\": \"📧 High Priority Email Reply - Instant Action Required\",\n  \"blocks\": [\n    {\n      \"type\": \"header\",\n      \"text\": {\n        \"type\": \"plain_text\",\n        \"text\": \"🔥 Hot Lead Reply Detected!\"\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"fields\": [\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Company:* ${$('fetch-company-details').first().json.name}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Website:* ${$('fetch-company-details').first().json.website}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Reply Sentiment:* ${$('parse-ai-analysis').first().json.updatedSentiment.toUpperCase()}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Intent:* ${$('parse-ai-analysis').first().json.updatedIntent.replace('_', ' ').toUpperCase()}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Priority:* ${$('parse-ai-analysis').first().json.priorityLevel.toUpperCase()}`\n        },\n        {\n          \"type\": \"mrkdwn\",\n          \"text\": `*Subject:* ${$('process-activity-data').first().json.subject_line}`\n        }\n      ]\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": `*Reply Content:*\\n> ${$('process-activity-data').first().json.reply_content.substring(0, 200)}${$('process-activity-data').first().json.reply_content.length > 200 ? '...' : ''}`\n      }\n    },\n    {\n      \"type\": \"section\",\n      \"text\": {\n        \"type\": \"mrkdwn\",\n        \"text\": `*AI Suggested Action:* ${$('parse-ai-analysis').first().json.suggestedFollowUp}`\n      }\n    },\n    {\n      \"type\": \"actions\",\n      \"elements\": [\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"View in Instantly\"\n          },\n          \"url\": `https://app.instantly.ai/app/campaigns/${$('fetch-lead-integration').first().json.instantly_campaign_id}`\n        },\n        {\n          \"type\": \"button\",\n          \"text\": {\n            \"type\": \"plain_text\",\n            \"text\": \"Company Profile\"\n          },\n          \"url\": `https://entelech.com/prospects/${$('parse-ai-analysis').first().json.companyId}`\n        }\n      ]\n    }\n  ]\n}) }}"
+      },
+      "id": "send-reply-alert",
+      "name": "Send Reply Alert to Slack",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [2400, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "should-update-lead-qualification",
+              "leftValue": "={{ $('parse-ai-analysis').first().json.leadQualificationUpdate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-qualification-update",
+      "name": "Check Qualification Update",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2000, 450]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "prospect_tracking"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "company_id",
+              "condition": "equal",
+              "value": "={{ $('parse-ai-analysis').first().json.companyId }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "qualification_status": "={{ $('parse-ai-analysis').first().json.qualificationStatus }}",
+            "last_contact_date": "={{ new Date().toISOString() }}",
+            "last_contact_method": "email_reply",
+            "notes": "={{ 'AI Analysis: ' + $('parse-ai-analysis').first().json.suggestedFollowUp + '. Reply sentiment: ' + $('parse-ai-analysis').first().json.updatedSentiment }}"
+          }
+        }
+      },
+      "id": "update-prospect-qualification",
+      "name": "Update Prospect Qualification",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [2200, 450],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  \"status\": \"success\",\n  \"message\": \"Email activity processed successfully\",\n  \"activity\": {\n    \"type\": $('process-activity-data').first().json.activity_type,\n    \"email\": $('instantly-webhook').first().json.email,\n    \"timestamp\": $('process-activity-data').first().json.activity_timestamp\n  },\n  \"processing\": {\n    \"engagement_updated\": $('process-activity-data').first().json.shouldUpdateEngagement,\n    \"ai_analysis_performed\": $('process-activity-data').first().json.shouldTriggerAI,\n    \"team_notified\": $('parse-ai-analysis').first()?.json?.shouldNotifyTeam || false,\n    \"qualification_updated\": $('parse-ai-analysis').first()?.json?.leadQualificationUpdate || false\n  },\n  \"ai_insights\": {\n    \"sentiment\": $('parse-ai-analysis').first()?.json?.updatedSentiment || 'not_analyzed',\n    \"intent\": $('parse-ai-analysis').first()?.json?.updatedIntent || 'not_analyzed',\n    \"priority\": $('parse-ai-analysis').first()?.json?.priorityLevel || 'not_analyzed',\n    \"suggested_action\": $('parse-ai-analysis').first()?.json?.suggestedFollowUp || 'not_analyzed'\n  }\n}) }}"
+      },
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2600, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  \"status\": \"error\",\n  \"message\": \"Invalid webhook data\",\n  \"required_fields\": [\"activity_type\", \"email\", \"lead_id\"],\n  \"received_data\": Object.keys($('instantly-webhook').first().json)\n}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "validation-error",
+      "name": "Validation Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [400, 400]
+    }
+  ],
+  "connections": {
+    "Instantly Activity Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Webhook": {
+      "main": [
+        [
+          {
+            "node": "Fetch Lead Integration",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validation Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Lead Integration": {
+      "main": [
+        [
+          {
+            "node": "Process Activity Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Activity Data": {
+      "main": [
+        [
+          {
+            "node": "Log Email Activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Email Activity": {
+      "main": [
+        [
+          {
+            "node": "Check Engagement Update",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Engagement Update": {
+      "main": [
+        [
+          {
+            "node": "Calculate Engagement Updates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Engagement Updates": {
+      "main": [
+        [
+          {
+            "node": "Update Integration Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Integration Metrics": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check AI Analysis": {
+      "main": [
+        [
+          {
+            "node": "Analyze Reply with Claude",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Reply with Claude": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Analysis": {
+      "main": [
+        [
+          {
+            "node": "Update Activity with AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Activity with AI Analysis": {
+      "main": [
+        [
+          {
+            "node": "Check Team Notification",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check Qualification Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Team Notification": {
+      "main": [
+        [
+          {
+            "node": "Fetch Company Details",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Company Details": {
+      "main": [
+        [
+          {
+            "node": "Send Reply Alert to Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply Alert to Slack": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Qualification Update": {
+      "main": [
+        [
+          {
+            "node": "Update Prospect Qualification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Prospect Qualification": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": {
+      "id": "error-handler-workflow"
+    },
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": {},
+  "tags": [
+    {
+      "createdAt": "2025-08-25T10:00:00.000Z",
+      "updatedAt": "2025-08-25T10:00:00.000Z",
+      "id": "instantly-integration",
+      "name": "Instantly Integration"
+    },
+    {
+      "createdAt": "2025-08-25T10:00:00.000Z", 
+      "updatedAt": "2025-08-25T10:00:00.000Z",
+      "id": "email-automation",
+      "name": "Email Automation"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-08-25T10:00:00.000Z",
+  "versionId": "1"
+}

@@ -1,0 +1,490 @@
+{
+  "name": "Prospect Intelligence - Report Generation",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "report-generation",
+        "options": {
+          "enableCors": true
+        },
+        "authentication": "headerAuth"
+      },
+      "id": "report-webhook",
+      "name": "Report Generation Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 200],
+      "webhookId": "report-generation-trigger"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "validate-analysis-id",
+              "leftValue": "={{ $json.analysisId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "validate-opportunity-id",
+              "leftValue": "={{ $json.opportunityId }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "validate-api-key",
+              "leftValue": "={{ $json.headers['x-api-key'] }}",
+              "rightValue": "={{ $env.N8N_INTERNAL_API_KEY }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "validate-report-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [400, 200]
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "prospect_analyses"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "id",
+              "condition": "equal",
+              "value": "={{ $json.analysisId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-analysis-for-report",
+      "name": "Fetch Analysis Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [600, 150],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "automation_opportunities"
+        },
+        "where": {
+          "values": [
+            {
+              "column": "id",
+              "condition": "equal",
+              "value": "={{ $json.opportunityId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fetch-opportunity-for-report",
+      "name": "Fetch Opportunity Data",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [600, 250],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine analysis and opportunity data for report generation\nconst analysisData = $('fetch-analysis-for-report').first().json;\nconst opportunityData = $('fetch-opportunity-for-report').first().json;\nconst webhookData = $('report-webhook').first().json;\n\n// Parse JSON fields\nconst businessModel = JSON.parse(analysisData.business_model || '{}');\nconst teamStructure = JSON.parse(analysisData.team_structure || '{}');\nconst automationAssessment = JSON.parse(analysisData.automation_assessment || '{}');\nconst opportunityIndicators = JSON.parse(analysisData.opportunity_indicators || '{}');\nconst leadCapture = JSON.parse(analysisData.lead_capture || '{}');\nconst opportunities = JSON.parse(opportunityData.opportunities || '[]');\nconst roiCalculations = JSON.parse(opportunityData.roi_calculations || '{}');\nconst implementationPlan = JSON.parse(opportunityData.implementation_plan || '{}');\nconst recommendations = JSON.parse(opportunityData.recommendations || '{}');\n\n// Generate report data structure\nconst reportData = {\n  reportId: `ENT-${Date.now()}`,\n  generatedDate: new Date().toLocaleDateString('en-US', {\n    year: 'numeric',\n    month: 'long',\n    day: 'numeric'\n  }),\n  businessInfo: {\n    url: analysisData.url,\n    businessType: businessModel.type || 'Service Business',\n    primaryServices: businessModel.primaryServices || [],\n    teamSize: teamStructure.estimatedSize || '1-5',\n    organizationMaturity: teamStructure.organizationMaturity || 'Growing'\n  },\n  currentState: {\n    automationLevel: automationAssessment.currentLevel || 'Basic',\n    digitalPresence: automationAssessment.digitalPresence || 'Fair',\n    systemIntegration: automationAssessment.systemIntegration || 'Limited',\n    customerJourney: automationAssessment.customerJourney || 'Manual'\n  },\n  opportunitiesIdentified: opportunities.slice(0, 5), // Top 5 opportunities\n  roiProjections: {\n    recommendedPackage: recommendations.primaryPackage || 'professional',\n    packageDetails: roiCalculations[recommendations.primaryPackage + 'Package'] || roiCalculations.professionalPackage || {},\n    allPackages: roiCalculations\n  },\n  implementationRoadmap: implementationPlan,\n  quickWins: recommendations.quickWins || [],\n  longTermGoals: recommendations.longTermGoals || [],\n  confidenceScore: Math.round((analysisData.confidence_score + opportunityData.confidence_level) / 2 * 100),\n  nextSteps: [\n    'Schedule discovery call with Entelech automation experts',\n    'Review detailed implementation timeline',\n    'Identify priority processes for Phase 1 automation',\n    'Begin 48-hour deployment preparation'\n  ]\n};\n\nreturn [{ json: reportData }];"
+      },
+      "id": "prepare-report-data",
+      "name": "Prepare Report Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [800, 200]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "options": {
+          "baseURL": "={{ $env.AZURE_OPENAI_ENDPOINT }}",
+          "headers": {
+            "api-key": "={{ $env.AZURE_OPENAI_API_KEY }}"
+          }
+        },
+        "model": "gpt-4",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a professional business report writer specializing in automation consulting reports. Create compelling, professional HTML content for business automation opportunity reports with proper styling and Entelech branding. Focus on clear value propositions and actionable insights."
+            },
+            {
+              "role": "user",
+              "content": "=Generate a professional HTML report for this business automation analysis:\n\nReport ID: {{ $json.reportId }}\nGenerated: {{ $json.generatedDate }}\nBusiness: {{ $json.businessInfo.url }}\nType: {{ $json.businessInfo.businessType }}\nTeam Size: {{ $json.businessInfo.teamSize }}\nCurrent Automation: {{ $json.currentState.automationLevel }}\nOpportunities: {{ JSON.stringify($json.opportunitiesIdentified) }}\nROI Projections: {{ JSON.stringify($json.roiProjections) }}\nRecommended Package: {{ $json.roiProjections.recommendedPackage }}\nConfidence Score: {{ $json.confidenceScore }}%\n\nCreate a complete HTML document with:\n1. Professional Entelech branding and styling\n2. Executive summary with key findings\n3. Current state assessment with visual indicators\n4. Detailed automation opportunities with ROI calculations\n5. Implementation roadmap with phases\n6. Pricing and package recommendations\n7. Clear next steps and call-to-action\n\nUse modern CSS styling, responsive design, and professional color scheme (Entelech blue: #2563EB)."
+            }
+          ]
+        },
+        "temperature": 0.3,
+        "maxTokens": 3000
+      },
+      "id": "generate-html-content",
+      "name": "Generate HTML Content",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1000, 200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and validate HTML content from AI response\nconst aiResponse = $input.first().json.message?.content || '';\nconst reportData = $('prepare-report-data').first().json;\n\n// Clean and validate HTML content\nlet htmlContent = aiResponse;\n\n// Ensure we have valid HTML structure\nif (!htmlContent.includes('<html>')) {\n  htmlContent = `<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Automation Opportunity Report - ${reportData.reportId}</title>\n    <style>\n        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background-color: #f8fafc; }\n        .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); overflow: hidden; }\n        .header { background: linear-gradient(135deg, #2563EB, #1d4ed8); color: white; padding: 40px; text-align: center; }\n        .content { padding: 40px; }\n        .section { margin-bottom: 40px; }\n        .roi-highlight { background: #eff6ff; padding: 20px; border-radius: 8px; border-left: 4px solid #2563EB; }\n        .opportunity-card { background: #f8fafc; padding: 20px; border-radius: 8px; margin-bottom: 20px; }\n        .cta-section { background: #2563EB; color: white; padding: 30px; text-align: center; }\n    </style>\n</head>\n<body>\n    <div class=\"container\">\n        <div class=\"header\">\n            <h1>Business Automation Opportunity Report</h1>\n            <p>Report ID: ${reportData.reportId} | Generated: ${reportData.generatedDate}</p>\n        </div>\n        <div class=\"content\">\n            <div class=\"section\">\n                <h2>Executive Summary</h2>\n                <p>Based on our comprehensive analysis of <strong>${reportData.businessInfo.url}</strong>, we've identified significant automation opportunities that could save <strong>${reportData.roiProjections.packageDetails.monthlyTimeSavings || 25} hours per month</strong> and deliver an estimated <strong>${reportData.roiProjections.packageDetails.yearOneROI || 200}% ROI</strong> in the first year.</p>\n            </div>\n            <div class=\"section roi-highlight\">\n                <h3>Recommended Package: ${reportData.roiProjections.recommendedPackage.toUpperCase()}</h3>\n                <p><strong>Investment:</strong> $${reportData.roiProjections.packageDetails.investment?.toLocaleString() || '7,500'}</p>\n                <p><strong>Monthly Savings:</strong> $${reportData.roiProjections.packageDetails.monthlyMoneySavings?.toLocaleString() || '1,875'}</p>\n                <p><strong>Payback Period:</strong> ${reportData.roiProjections.packageDetails.paybackPeriodMonths || 4} months</p>\n            </div>\n            <div class=\"section\">\n                <h2>Automation Opportunities</h2>\n                ${reportData.opportunitiesIdentified.map(opp => `\n                    <div class=\"opportunity-card\">\n                        <h4>${opp.category?.replace('-', ' ').toUpperCase() || 'Process Automation'}</h4>\n                        <p><strong>Description:</strong> ${opp.description || 'Automate manual processes'}</p>\n                        <p><strong>Time Savings:</strong> ${opp.potentialTimeSavings || '70%'} | <strong>Priority:</strong> ${opp.priority || 'High'}</p>\n                    </div>\n                `).join('')}\n            </div>\n            <div class=\"section\">\n                <h2>Next Steps</h2>\n                <ul>\n                    ${reportData.nextSteps.map(step => `<li>${step}</li>`).join('')}\n                </ul>\n            </div>\n        </div>\n        <div class=\"cta-section\">\n            <h3>Ready to Transform Your Business?</h3>\n            <p>Schedule your free consultation with our automation experts today!</p>\n            <p><strong>Contact:</strong> hello@entelech.ai | (555) 123-4567</p>\n        </div>\n    </div>\n</body>\n</html>`;\n}\n\n// Prepare data for PDF generation\nconst result = {\n  htmlContent: htmlContent,\n  reportData: reportData,\n  fileName: `entelech-automation-report-${reportData.reportId.toLowerCase()}.html`,\n  pdfFileName: `entelech-automation-report-${reportData.reportId.toLowerCase()}.pdf`\n};\n\nreturn [{ json: result }];"
+      },
+      "id": "prepare-html-content",
+      "name": "Prepare HTML Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1200, 200]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "={{ $env.PUPPETEER_SERVICE_URL || 'http://localhost:3001' }}/generate-pdf",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.PUPPETEER_SERVICE_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({\n  \"html\": $json.htmlContent,\n  \"options\": {\n    \"format\": \"A4\",\n    \"printBackground\": true,\n    \"margin\": {\n      \"top\": \"20mm\",\n      \"right\": \"15mm\",\n      \"bottom\": \"20mm\",\n      \"left\": \"15mm\"\n    }\n  },\n  \"filename\": $json.pdfFileName\n}) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "responseFormat": "file"
+          }
+        }
+      },
+      "id": "generate-pdf",
+      "name": "Generate PDF Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1400, 200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "resource": "file",
+        "operation": "upload",
+        "containerName": "={{ $env.AZURE_STORAGE_CONTAINER }}",
+        "fileName": "={{ $('prepare-html-content').first().json.pdfFileName }}",
+        "binaryData": true,
+        "options": {
+          "contentType": "application/pdf"
+        }
+      },
+      "id": "upload-to-azure-storage",
+      "name": "Upload to Azure Blob Storage",
+      "type": "n8n-nodes-base.microsoftAzure",
+      "typeVersion": 1,
+      "position": [1600, 200],
+      "credentials": {
+        "microsoftAzure": {
+          "id": "azure-storage-credentials",
+          "name": "Azure Storage Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "reports"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "analysis_id": "={{ $('report-webhook').first().json.analysisId }}",
+            "opportunity_id": "={{ $('report-webhook').first().json.opportunityId }}",
+            "report_type": "automation-opportunity",
+            "title": "=Business Automation Opportunity Report - {{ $('prepare-report-data').first().json.reportId }}",
+            "file_url": "={{ $('upload-to-azure-storage').first().json.fileUrl || $('upload-to-azure-storage').first().json.url }}",
+            "file_path": "={{ $('prepare-html-content').first().json.pdfFileName }}",
+            "status": "completed",
+            "generated_at": "={{ new Date().toISOString() }}",
+            "metadata": "={{ JSON.stringify({\n  reportId: $('prepare-report-data').first().json.reportId,\n  recommendedPackage: $('prepare-report-data').first().json.roiProjections.recommendedPackage,\n  confidenceScore: $('prepare-report-data').first().json.confidenceScore,\n  businessType: $('prepare-report-data').first().json.businessInfo.businessType\n}) }}"
+          }
+        }
+      },
+      "id": "store-report-metadata",
+      "name": "Store Report Metadata",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1800, 200],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  \"status\": \"success\",\n  \"message\": \"Report generated successfully\",\n  \"reportId\": $('prepare-report-data').first().json.reportId,\n  \"reportUrl\": $('upload-to-azure-storage').first().json.fileUrl || $('upload-to-azure-storage').first().json.url,\n  \"fileName\": $('prepare-html-content').first().json.pdfFileName,\n  \"recommendedPackage\": $('prepare-report-data').first().json.roiProjections.recommendedPackage,\n  \"estimatedROI\": $('prepare-report-data').first().json.roiProjections.packageDetails.yearOneROI + '%',\n  \"confidenceScore\": $('prepare-report-data').first().json.confidenceScore + '%',\n  \"nextSteps\": $('prepare-report-data').first().json.nextSteps\n}) }}"
+      },
+      "id": "success-report-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2000, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({\n  \"status\": \"error\",\n  \"message\": \"Invalid input parameters for report generation\",\n  \"required\": [\"analysisId\", \"opportunityId\"],\n  \"headers\": [\"x-api-key\"]\n}) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "error-report-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [400, 350]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "value": "public"
+        },
+        "table": {
+          "value": "workflow_logs"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "workflow_name": "report-generation",
+            "status": "error",
+            "error_message": "={{ $json.error?.message || 'Unknown error in report generation' }}",
+            "input_data": "={{ JSON.stringify($('report-webhook').first().json) }}",
+            "timestamp": "={{ new Date().toISOString() }}"
+          }
+        }
+      },
+      "id": "log-report-error",
+      "name": "Log Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [600, 350],
+      "credentials": {
+        "postgres": {
+          "id": "azure-postgres-credentials",
+          "name": "Azure PostgreSQL"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Report Generation Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Fetch Analysis Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Opportunity Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Analysis Data": {
+      "main": [
+        [
+          {
+            "node": "Prepare Report Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Opportunity Data": {
+      "main": [
+        [
+          {
+            "node": "Prepare Report Data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Prepare Report Data": {
+      "main": [
+        [
+          {
+            "node": "Generate HTML Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate HTML Content": {
+      "main": [
+        [
+          {
+            "node": "Prepare HTML Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare HTML Content": {
+      "main": [
+        [
+          {
+            "node": "Generate PDF Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate PDF Report": {
+      "main": [
+        [
+          {
+            "node": "Upload to Azure Blob Storage",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload to Azure Blob Storage": {
+      "main": [
+        [
+          {
+            "node": "Store Report Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Report Metadata": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": {
+      "id": "error-handler-workflow"
+    },
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": {},
+  "tags": [
+    {
+      "createdAt": "2025-01-15T10:00:00.000Z",
+      "updatedAt": "2025-01-15T10:00:00.000Z",
+      "id": "prospect-intelligence",
+      "name": "Prospect Intelligence"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-01-15T10:00:00.000Z",
+  "versionId": "3"
+}

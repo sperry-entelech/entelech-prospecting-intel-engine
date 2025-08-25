@@ -1,0 +1,457 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "Enterprise-grade security infrastructure for Prospect Intelligence Engine - SOC 2 Type II compliant",
+    "author": "Enterprise QA Architect",
+    "version": "2.1.0"
+  },
+  "parameters": {
+    "projectName": {
+      "type": "string",
+      "defaultValue": "prospect-intelligence",
+      "metadata": {
+        "description": "Base name for all resources"
+      }
+    },
+    "environment": {
+      "type": "string",
+      "defaultValue": "production",
+      "allowedValues": ["development", "staging", "production"],
+      "metadata": {
+        "description": "Environment designation"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources"
+      }
+    },
+    "tenantId": {
+      "type": "string",
+      "defaultValue": "[subscription().tenantId]",
+      "metadata": {
+        "description": "Azure AD Tenant ID"
+      }
+    },
+    "adminObjectId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object ID of the Azure AD admin user"
+      }
+    }
+  },
+  "variables": {
+    "keyVaultName": "[concat(parameters('projectName'), '-kv-', parameters('environment'))]",
+    "appInsightsName": "[concat(parameters('projectName'), '-ai-', parameters('environment'))]",
+    "logAnalyticsName": "[concat(parameters('projectName'), '-la-', parameters('environment'))]",
+    "securityCenterName": "[concat(parameters('projectName'), '-sc-', parameters('environment'))]",
+    "applicationGatewayName": "[concat(parameters('projectName'), '-ag-', parameters('environment'))]",
+    "nsgName": "[concat(parameters('projectName'), '-nsg-', parameters('environment'))]",
+    "wafPolicyName": "[concat(parameters('projectName'), '-waf-', parameters('environment'))]",
+    "storageAccountName": "[concat(replace(parameters('projectName'), '-', ''), 'sa', parameters('environment'))]",
+    "postgreSqlName": "[concat(parameters('projectName'), '-pgsql-', parameters('environment'))]",
+    "actionGroupName": "[concat(parameters('projectName'), '-ag-alerts-', parameters('environment'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2021-10-01",
+      "name": "[variables('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "family": "A",
+          "name": "premium"
+        },
+        "tenantId": "[parameters('tenantId')]",
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "defaultAction": "Deny",
+          "ipRules": [],
+          "virtualNetworkRules": []
+        },
+        "accessPolicies": [
+          {
+            "tenantId": "[parameters('tenantId')]",
+            "objectId": "[parameters('adminObjectId')]",
+            "permissions": {
+              "keys": [
+                "get",
+                "list",
+                "create",
+                "delete",
+                "update",
+                "import",
+                "backup",
+                "restore"
+              ],
+              "secrets": [
+                "get",
+                "list",
+                "set",
+                "delete",
+                "backup",
+                "restore"
+              ],
+              "certificates": [
+                "get",
+                "list",
+                "create",
+                "delete",
+                "update",
+                "import"
+              ]
+            }
+          }
+        ],
+        "enabledForDeployment": false,
+        "enabledForDiskEncryption": true,
+        "enabledForTemplateDeployment": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 90,
+        "enablePurgeProtection": true,
+        "createMode": "default"
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2021-12-01-preview",
+      "name": "[variables('logAnalyticsName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 730,
+        "features": {
+          "enableLogAccessUsingOnlyResourcePermissions": true,
+          "disableLocalAuth": false
+        },
+        "workspaceCapping": {
+          "dailyQuotaGb": 10
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/components",
+      "apiVersion": "2020-02-02",
+      "name": "[variables('appInsightsName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]"
+      ],
+      "kind": "web",
+      "properties": {
+        "Application_Type": "web",
+        "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))]",
+        "IngestionMode": "LogAnalytics",
+        "SamplingPercentage": 100,
+        "RetentionInDays": 90
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2021-05-01",
+      "name": "[variables('nsgName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "AllowHTTPS",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "443",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "AllowHTTP",
+            "properties": {
+              "protocol": "Tcp",
+              "sourcePortRange": "*",
+              "destinationPortRange": "80",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 110,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "DenyAllInbound",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Deny",
+              "priority": 4000,
+              "direction": "Inbound"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/ApplicationGatewayWebApplicationFirewallPolicies",
+      "apiVersion": "2021-05-01",
+      "name": "[variables('wafPolicyName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "policySettings": {
+          "requestBodyCheck": true,
+          "maxRequestBodySizeInKb": 128,
+          "fileUploadLimitInMb": 100,
+          "state": "Enabled",
+          "mode": "Prevention"
+        },
+        "managedRules": {
+          "managedRuleSets": [
+            {
+              "ruleSetType": "OWASP",
+              "ruleSetVersion": "3.2",
+              "ruleGroupOverrides": [
+                {
+                  "ruleGroupName": "REQUEST-932-APPLICATION-ATTACK-RCE",
+                  "rules": [
+                    {
+                      "ruleId": "932100",
+                      "state": "Enabled"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "customRules": [
+          {
+            "name": "RateLimitRule",
+            "priority": 1,
+            "ruleType": "RateLimitRule",
+            "rateLimitDuration": "PT1M",
+            "rateLimitThreshold": 100,
+            "matchConditions": [
+              {
+                "matchVariables": [
+                  {
+                    "variableName": "RemoteAddr"
+                  }
+                ],
+                "operator": "IPMatch",
+                "negationCondition": false,
+                "matchValues": [
+                  "0.0.0.0/0"
+                ]
+              }
+            ],
+            "action": "Block"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2021-09-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard_ZRS"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "defaultToOAuthAuthentication": false,
+        "allowCrossTenantReplication": false,
+        "minimumTlsVersion": "TLS1_2",
+        "allowBlobPublicAccess": false,
+        "allowSharedKeyAccess": true,
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "virtualNetworkRules": [],
+          "ipRules": [],
+          "defaultAction": "Deny"
+        },
+        "supportsHttpsTrafficOnly": true,
+        "encryption": {
+          "requireInfrastructureEncryption": true,
+          "services": {
+            "file": {
+              "keyType": "Account",
+              "enabled": true
+            },
+            "blob": {
+              "keyType": "Account",
+              "enabled": true
+            }
+          },
+          "keySource": "Microsoft.Storage"
+        },
+        "accessTier": "Hot"
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2021-09-01",
+      "name": "[concat(variables('storageAccountName'), '/default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "properties": {
+        "changeFeed": {
+          "enabled": false
+        },
+        "restorePolicy": {
+          "enabled": false
+        },
+        "containerDeleteRetentionPolicy": {
+          "enabled": true,
+          "days": 30
+        },
+        "cors": {
+          "corsRules": []
+        },
+        "deleteRetentionPolicy": {
+          "enabled": true,
+          "days": 30
+        },
+        "isVersioningEnabled": true
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2021-09-01",
+      "name": "[concat(variables('storageAccountName'), '/default/prospect-reports')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageAccountName'), 'default')]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "properties": {
+        "publicAccess": "None",
+        "metadata": {}
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2021-06-01",
+      "name": "[variables('postgreSqlName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard_D4s_v3",
+        "tier": "GeneralPurpose"
+      },
+      "properties": {
+        "administratorLogin": "postgres_admin",
+        "administratorLoginPassword": "[concat('P@ssw0rd!', uniqueString(resourceGroup().id))]",
+        "version": "14",
+        "storage": {
+          "storageSizeGB": 512,
+          "autoGrow": "Enabled"
+        },
+        "backup": {
+          "backupRetentionDays": 35,
+          "geoRedundantBackup": "Enabled"
+        },
+        "highAvailability": {
+          "mode": "ZoneRedundant"
+        },
+        "network": {
+          "delegatedSubnetResourceId": null,
+          "privateDnsZoneArmResourceId": null
+        },
+        "createMode": "Default"
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/configurations",
+      "apiVersion": "2021-06-01",
+      "name": "[concat(variables('postgreSqlName'), '/ssl')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgreSqlName'))]"
+      ],
+      "properties": {
+        "value": "on",
+        "source": "user-override"
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/configurations",
+      "apiVersion": "2021-06-01",
+      "name": "[concat(variables('postgreSqlName'), '/log_statement')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgreSqlName'))]"
+      ],
+      "properties": {
+        "value": "all",
+        "source": "user-override"
+      }
+    },
+    {
+      "type": "Microsoft.Insights/actionGroups",
+      "apiVersion": "2021-09-01",
+      "name": "[variables('actionGroupName')]",
+      "location": "Global",
+      "properties": {
+        "groupShortName": "PIEAlerts",
+        "enabled": true,
+        "emailReceivers": [
+          {
+            "name": "SecurityTeam",
+            "emailAddress": "security@entelech.com",
+            "useCommonAlertSchema": true
+          },
+          {
+            "name": "TechnicalTeam",
+            "emailAddress": "tech@entelech.com",
+            "useCommonAlertSchema": true
+          }
+        ],
+        "smsReceivers": [],
+        "webhookReceivers": [],
+        "armRoleReceivers": []
+      }
+    }
+  ],
+  "outputs": {
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('keyVaultName')]"
+    },
+    "keyVaultUri": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))).vaultUri]"
+    },
+    "applicationInsightsInstrumentationKey": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName'))).InstrumentationKey]"
+    },
+    "applicationInsightsConnectionString": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/components', variables('appInsightsName'))).ConnectionString]"
+    },
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsName'))).customerId]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[variables('storageAccountName')]"
+    },
+    "postgreSqlServerName": {
+      "type": "string",
+      "value": "[variables('postgreSqlName')]"
+    },
+    "postgreSqlConnectionString": {
+      "type": "string",
+      "value": "[concat('Host=', reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgreSqlName'))).fullyQualifiedDomainName, ';Database=postgres;Username=postgres_admin;Password=', concat('P@ssw0rd!', uniqueString(resourceGroup().id)), ';SSL Mode=Require;')]"
+    }
+  }
+}
